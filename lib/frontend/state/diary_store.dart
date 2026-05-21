@@ -1,0 +1,692 @@
+﻿import 'package:flutter/material.dart';
+
+import '../theme/app_colors.dart';
+
+// ─── Relationship weather ─────────────────────────────────────────────────────
+
+enum DiaryWeather { sunny, partlyCloudy, overcast, quiet, clearingUp }
+
+// ─── DiaryEntry ───────────────────────────────────────────────────────────────
+
+class DiaryEntry {
+  final String id;
+  final String diaryId;
+  final bool isMine;
+  final String type; // 'voice' | 'video'
+  final String path; // local file path
+  final String? transcript;
+  final String? prompt; // prompt card text if record was prompted
+  final String? occasionTag; // e.g. '🪔 Diwali greeting'
+  final DateTime createdAt;
+  DateTime? listenedAt; // set when recipient plays the note
+  double? moodEnergy; // 0.0–1.0, derived from amplitude analysis
+  final List<DiaryEntry> reactions; // voice reactions to this entry
+  final String? parentEntryId; // set for reactions; null for top-level entries
+
+  DiaryEntry({
+    required this.id,
+    required this.diaryId,
+    required this.isMine,
+    required this.type,
+    required this.path,
+    this.transcript,
+    this.prompt,
+    this.occasionTag,
+    required this.createdAt,
+    this.listenedAt,
+    this.moodEnergy,
+    List<DiaryEntry>? reactions,
+    this.parentEntryId,
+  }) : reactions = reactions ?? [];
+}
+
+// ─── DiaryContact ─────────────────────────────────────────────────────────────
+
+class DiaryContact {
+  final String id;
+  final String name;
+  final String relation; // freeform user-set label — not system-imposed
+  final String phone;
+  final String initial;
+  final Color _baseAvatarColor; // underlying colour; overridden by avatarColorIndex
+  final int avatarColorIndex; // -1 = use _baseAvatarColor; 0–7 = avatarPalette
+  final bool isGroup;
+  final List<DiaryContact> members; // group members (empty for 1:1 diaries)
+  final String? elderMemberId; // designated Elder in the group
+  final String lastSnippet;
+  final String lastTime;
+  final String customLabel; // user-set display name override (e.g. "Papa")
+  final String? profileVoiceNotePath; // path to recorded introduction note
+
+  // ── 8-colour user-selectable palette ──────────────────────────────────────
+
+  static const List<Color> avatarPalette = [
+    Color(0xFFFF9500), // Amber
+    Color(0xFFFF6B00), // Ember
+    Color(0xFFFF6B8A), // Rose
+    AppColors.violet, // Purple
+    AppColors.successGreen, // Green
+    AppColors.azure, // Blue
+    Color(0xFF5AC8FA), // Teal
+    Color(0xFFFFD60A), // Gold
+  ];
+
+  // ── Computed colour — palette wins if index is valid ──────────────────────
+
+  Color get avatarColor =>
+      avatarColorIndex >= 0 && avatarColorIndex < avatarPalette.length
+          ? avatarPalette[avatarColorIndex]
+          : _baseAvatarColor;
+
+  // ── Display name — custom label > name > phone ────────────────────────────
+
+  String get displayName {
+    if (customLabel.isNotEmpty) return customLabel;
+    if (name.isNotEmpty) return name;
+    return phone;
+  }
+
+  const DiaryContact({
+    required this.id,
+    required this.name,
+    required this.relation,
+    required this.phone,
+    required this.initial,
+    required Color avatarColor,
+    this.avatarColorIndex = -1,
+    this.isGroup = false,
+    this.members = const [],
+    this.elderMemberId,
+    this.lastSnippet = '🎙 Tap to send your first voice note',
+    this.lastTime = 'Now',
+    this.customLabel = '',
+    this.profileVoiceNotePath,
+  }) : _baseAvatarColor = avatarColor;
+
+  DiaryContact copyWith({
+    String? lastSnippet,
+    String? lastTime,
+    String? customLabel,
+    int? avatarColorIndex,
+    String? profileVoiceNotePath,
+    List<DiaryContact>? members,
+    String? elderMemberId,
+  }) {
+    return DiaryContact(
+      id: id,
+      name: name,
+      relation: relation,
+      phone: phone,
+      initial: initial,
+      avatarColor: _baseAvatarColor,
+      avatarColorIndex: avatarColorIndex ?? this.avatarColorIndex,
+      isGroup: isGroup,
+      members: members ?? this.members,
+      elderMemberId: elderMemberId ?? this.elderMemberId,
+      lastSnippet: lastSnippet ?? this.lastSnippet,
+      lastTime: lastTime ?? this.lastTime,
+      customLabel: customLabel ?? this.customLabel,
+      profileVoiceNotePath:
+          profileVoiceNotePath ?? this.profileVoiceNotePath,
+    );
+  }
+}
+
+// ─── DiaryStore ───────────────────────────────────────────────────────────────
+
+class DiaryStore extends ChangeNotifier {
+  DiaryStore._() {
+    // Simulate first-load delay so skeleton screens are visible.
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _isLoading = false;
+      notifyListeners();
+    });
+  }
+  static final DiaryStore instance = DiaryStore._();
+
+  // ── Loading state ─────────────────────────────────────────────────────────
+  bool _isLoading = true;
+  bool get isLoading => _isLoading;
+
+  // ── Diaries ───────────────────────────────────────────────────────────────
+
+  final List<DiaryContact> _diaries = [];
+
+  final Set<String> _pinned     = {};
+  final Set<String> _muted      = {};
+  final Set<String> _favourites = {};
+  final Set<String> _locked     = {};
+  final Set<String> _archived   = {};
+
+  // ── Entries (voice/video notes per diary) ─────────────────────────────────
+
+  final Map<String, List<DiaryEntry>> _entries = {};
+
+  // ── Streak tracking (voice/video sends — not pulse) ───────────────────────
+
+  final Map<String, int> _streakDays = {};
+  final Map<String, DateTime?> _lastSentDate = {};
+
+  // ── Event flags (read-once — cleared after reading) ───────────────────────
+
+  final Map<String, bool> _streakJustBroke = {};
+  final Map<String, bool> _justResumed     = {};
+  final Map<String, int?> _milestoneReached = {};
+
+  // Stores the streak value at the moment it broke (so UI can say "N-day streak paused").
+  final Map<String, int> _brokeStreakPreviousDays = {};
+
+  // ── Per-diary metadata ────────────────────────────────────────────────────
+
+  final Map<String, Set<String>> _jarredEntries = {};
+  final Map<String, String?> _occasionTag = {};
+
+  // ── On This Day cache ─────────────────────────────────────────────────────
+  // Set by OnThisDayService.load() once per day; drives the home banner.
+  DiaryEntry? _onThisDayEntry;
+
+  DiaryEntry? get onThisDayEntry => _onThisDayEntry;
+
+  void cacheOnThisDayEntry(DiaryEntry? entry) {
+    _onThisDayEntry = entry;
+    if (entry != null) notifyListeners();
+  }
+
+  static const List<int> _milestones = [3, 7, 14, 30, 60, 100, 365];
+
+  // ── Listener's receipt signal ─────────────────────────────────────────────
+  // Fired once per entry when a sent note (isMine: true) first gets listenedAt.
+  // UI layer wires this up to show an in-app banner.
+  void Function(String entryId, String diaryId)? onListenedReceipt;
+
+  // ── Date helpers ──────────────────────────────────────────────────────────
+
+  bool _isToday(DateTime dt) {
+    final now = DateTime.now();
+    return dt.year == now.year &&
+        dt.month == now.month &&
+        dt.day == now.day;
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // STREAK QUERIES
+  // ═════════════════════════════════════════════════════════════════════════
+
+  int streakDays(String id) => _streakDays[id] ?? 0;
+
+  bool hasSentToday(String id) {
+    final last = _lastSentDate[id];
+    return last != null && _isToday(last);
+  }
+
+  /// True when streak > 0, not sent today, and yesterday was the last send.
+  bool streakAtRisk(String id) {
+    if (streakDays(id) == 0) return false;
+    if (hasSentToday(id)) return false;
+    final last = _lastSentDate[id];
+    if (last == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final lastDay = DateTime(last.year, last.month, last.day);
+    return lastDay == today.subtract(const Duration(days: 1));
+  }
+
+  /// Reads and clears the streak-just-broke flag. Returns true once per break.
+  bool streakJustBroke(String id) {
+    final v = _streakJustBroke.remove(id) ?? false;
+    return v;
+  }
+
+  /// Non-destructive peek — true if the broke flag is set without clearing it.
+  /// Use this in build methods; use streakJustBroke() only for explicit clear.
+  bool hasBrokeStreak(String id) => _streakJustBroke[id] ?? false;
+
+  /// The streak value before it broke — used by the break banner.
+  int brokeStreakPreviousDays(String id) => _brokeStreakPreviousDays[id] ?? 0;
+
+  /// Reads and clears the just-resumed flag. Returns true once after resuming.
+  bool justResumed(String id) {
+    final v = _justResumed.remove(id) ?? false;
+    return v;
+  }
+
+  /// Non-destructive peek for justResumed.
+  bool hasJustResumed(String id) => _justResumed[id] ?? false;
+
+  /// Reads and clears the milestone flag. Returns the milestone value once.
+  int? milestoneReached(String id) {
+    final v = _milestoneReached.remove(id);
+    return v;
+  }
+
+  void clearMilestone(String id) => _milestoneReached.remove(id);
+
+  // Returns the ambient health signal for a diary relationship.
+  // Uses hasJustResumed (non-destructive) so build methods don't consume the flag.
+  DiaryWeather weatherState(String id) {
+    if (hasSentToday(id) && streakDays(id) > 0) return DiaryWeather.sunny;
+    if (streakAtRisk(id)) return DiaryWeather.partlyCloudy;
+    if (hasJustResumed(id)) return DiaryWeather.clearingUp;
+    final last = _lastSentDate[id];
+    if (last == null) return DiaryWeather.overcast;
+    final gap = DateTime.now().difference(last).inDays;
+    if (gap >= 7) return DiaryWeather.quiet;
+    if (gap >= 3) return DiaryWeather.overcast;
+    return DiaryWeather.partlyCloudy;
+  }
+
+  // Emoji tree that grows with streak.
+  String streakTree(String id) {
+    final d = streakDays(id);
+    if (d >= 90) return '🌸';
+    if (d >= 60) return '🎋';
+    if (d >= 30) return '🌲';
+    if (d >= 7)  return '🌿';
+    if (d >= 1)  return '🌱';
+    return '🪨';
+  }
+
+  String streakLabel(String id) {
+    final d = streakDays(id);
+    if (d >= 90) return 'In full bloom';
+    if (d >= 60) return 'Deep roots';
+    if (d >= 30) return 'Growing strong';
+    if (d >= 7)  return 'Taking root';
+    if (d >= 1)  return 'Just planted';
+    return 'Not started yet';
+  }
+
+  int get bestStreakDays {
+    if (_diaries.isEmpty) return 0;
+    return _diaries
+        .map((d) => streakDays(d.id))
+        .reduce((a, b) => a > b ? a : b);
+  }
+
+  /// Alias for bestStreakDays — used by Me screen stats.
+  int get bestSendStreak => bestStreakDays;
+
+  /// Call on app open to proactively detect streaks that broke overnight.
+  void checkForBrokenStreaks() {
+    bool changed = false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    for (final d in _diaries) {
+      final id = d.id;
+      final days = _streakDays[id] ?? 0;
+      if (days == 0) continue;
+      if (hasSentToday(id)) continue;
+      final last = _lastSentDate[id];
+      if (last == null) continue;
+      final lastDay = DateTime(last.year, last.month, last.day);
+      final diff = today.difference(lastDay).inDays;
+      if (diff >= 2 && !(_streakJustBroke[id] ?? false)) {
+        _brokeStreakPreviousDays[id] = days;
+        _streakJustBroke[id] = true;
+        _streakDays[id] = 0;
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  // ── Internal: record a voice/video send toward streak ─────────────────────
+
+  void _recordSend(String id) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final last = _lastSentDate[id];
+    final wasJustBroke = _streakJustBroke[id] ?? false;
+    final previousStreak = _streakDays[id] ?? 0;
+
+    if (last == null) {
+      // First ever send.
+      _streakDays[id] = 1;
+    } else if (wasJustBroke) {
+      // Sending after a detected break — fresh start.
+      _streakDays[id] = 1;
+      _streakJustBroke.remove(id);
+      _brokeStreakPreviousDays.remove(id);
+      _justResumed[id] = true;
+    } else {
+      final lastDay = DateTime(last.year, last.month, last.day);
+      final diff = today.difference(lastDay).inDays;
+      if (diff == 0) {
+        // Already sent today — streak unchanged.
+      } else if (diff == 1) {
+        // Consecutive day — streak continues.
+        _streakDays[id] = previousStreak + 1;
+      } else {
+        // Missed day(s) — break not yet detected proactively; handle inline.
+        _streakJustBroke.remove(id);
+        _justResumed[id] = true;
+        _streakDays[id] = 1;
+      }
+    }
+
+    _lastSentDate[id] = now;
+
+    // Check milestones on any streak increase.
+    final newStreak = _streakDays[id] ?? 0;
+    if (newStreak > previousStreak && _milestones.contains(newStreak)) {
+      _milestoneReached[id] = newStreak;
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ENTRY QUERIES & MUTATIONS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  List<DiaryEntry> entriesFor(String diaryId) =>
+      List.unmodifiable(_entries[diaryId] ?? []);
+
+  void addEntry(DiaryEntry entry) {
+    _entries.putIfAbsent(entry.diaryId, () => []).add(entry);
+    notifyListeners();
+  }
+
+  void markListened(String entryId) {
+    for (final list in _entries.values) {
+      for (final e in list) {
+        if (e.id == entryId) {
+          final isFirstListen = e.listenedAt == null;
+          e.listenedAt = DateTime.now();
+          notifyListeners();
+          // Fire receipt signal only for sent notes getting their first listen.
+          if (isFirstListen && e.isMine) {
+            onListenedReceipt?.call(entryId, e.diaryId);
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  void updateEntryTranscript(String entryId, String transcript) {
+    // DiaryEntry.transcript is final; create a replacement entry.
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId]!;
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == entryId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: old.id,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: old.path,
+            transcript: transcript,
+            prompt: old.prompt,
+            occasionTag: old.occasionTag,
+            createdAt: old.createdAt,
+            listenedAt: old.listenedAt,
+            moodEnergy: old.moodEnergy,
+            reactions: old.reactions,
+            parentEntryId: old.parentEntryId,
+          );
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  void updateEntryMood(String entryId, double energy) {
+    for (final list in _entries.values) {
+      for (final e in list) {
+        if (e.id == entryId) {
+          e.moodEnergy = energy;
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  void addReaction(String parentEntryId, DiaryEntry reaction) {
+    for (final list in _entries.values) {
+      for (final e in list) {
+        if (e.id == parentEntryId) {
+          e.reactions.add(reaction);
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  void removeEntry(String entryId) {
+    for (final list in _entries.values) {
+      list.removeWhere((e) => e.id == entryId);
+    }
+    notifyListeners();
+  }
+
+  /// Formatted "9:30 AM" label for when an entry was listened to.
+  String? listenedAtLabel(String entryId) {
+    for (final list in _entries.values) {
+      for (final e in list) {
+        if (e.id == entryId && e.listenedAt != null) {
+          final h = e.listenedAt!.hour;
+          final m = e.listenedAt!.minute.toString().padLeft(2, '0');
+          final period = h >= 12 ? 'PM' : 'AM';
+          final h12 = h == 0 ? 12 : (h > 12 ? h - 12 : h);
+          return '$h12:$m $period';
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Groups entry IDs by "YYYY-MM" key for the Memory Tree month view.
+  Map<String, List<String>> momentsByMonth(String diaryId) {
+    final entries = _entries[diaryId] ?? [];
+    final result = <String, List<String>>{};
+    for (final e in entries) {
+      final key =
+          '${e.createdAt.year}-${e.createdAt.month.toString().padLeft(2, '0')}';
+      result.putIfAbsent(key, () => []).add(e.id);
+    }
+    // Sort descending (most recent month first).
+    final sorted = Map.fromEntries(
+      result.entries.toList()..sort((a, b) => b.key.compareTo(a.key)),
+    );
+    return sorted;
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // MEMORY JAR
+  // ═════════════════════════════════════════════════════════════════════════
+
+  void jarEntry(String diaryId, String entryId) {
+    _jarredEntries.putIfAbsent(diaryId, () => {}).add(entryId);
+    notifyListeners();
+  }
+
+  void unjarEntry(String diaryId, String entryId) {
+    _jarredEntries[diaryId]?.remove(entryId);
+    notifyListeners();
+  }
+
+  bool isJarred(String diaryId, String entryId) =>
+      _jarredEntries[diaryId]?.contains(entryId) ?? false;
+
+  Set<String> jarredFor(String diaryId) =>
+      Set.unmodifiable(_jarredEntries[diaryId] ?? {});
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // OCCASION TAGS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  void setOccasionTag(String id, String? tag) {
+    _occasionTag[id] = tag;
+    // No notifyListeners — occasion tag is set at send time, not displayed live.
+  }
+
+  String? occasionTag(String id) => _occasionTag[id];
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // PERSONALISATION
+  // ═════════════════════════════════════════════════════════════════════════
+
+  void updateCustomLabel(String id, String label) {
+    final idx = _diaries.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    _diaries[idx] = _diaries[idx].copyWith(customLabel: label);
+    notifyListeners();
+  }
+
+  void updateAvatarColorIndex(String id, int index) {
+    final idx = _diaries.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    _diaries[idx] = _diaries[idx].copyWith(avatarColorIndex: index);
+    notifyListeners();
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ANNIVERSARIES
+  // ═════════════════════════════════════════════════════════════════════════
+
+  /// Returns a map of diaryId → years for diaries whose first entry
+  /// anniversary falls on today's date.
+  Map<String, int> get diaryAnniversaries {
+    final result = <String, int>{};
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId];
+      if (list == null || list.isEmpty) continue;
+      final first = list.reduce(
+          (a, b) => a.createdAt.isBefore(b.createdAt) ? a : b);
+      final firstDay = DateTime(
+          first.createdAt.year, first.createdAt.month, first.createdAt.day);
+      final diff = today.difference(firstDay);
+      if (first.createdAt.month == now.month &&
+          first.createdAt.day == now.day &&
+          diff.inDays >= 365) {
+        result[diaryId] = diff.inDays ~/ 365;
+      }
+    }
+    return result;
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // DIARY QUERIES
+  // ═════════════════════════════════════════════════════════════════════════
+
+  bool isPinned   (String id) => _pinned.contains(id);
+  bool isMuted    (String id) => _muted.contains(id);
+  bool isFavourite(String id) => _favourites.contains(id);
+  bool isLocked   (String id) => _locked.contains(id);
+  bool isArchived (String id) => _archived.contains(id);
+  bool has        (String id) => _diaries.any((d) => d.id == id);
+
+  /// Visible diaries: archived hidden, pinned sorted first.
+  List<DiaryContact> get diaries {
+    final visible = _diaries.where((d) => !_archived.contains(d.id)).toList();
+    final pinned  = visible.where((d) => _pinned.contains(d.id)).toList();
+    final rest    = visible.where((d) => !_pinned.contains(d.id)).toList();
+    return [...pinned, ...rest];
+  }
+
+  /// Archived diaries for the archived-chats screen.
+  List<DiaryContact> get archived =>
+      _diaries.where((d) => _archived.contains(d.id)).toList();
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // MUTATIONS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  void add(DiaryContact contact) {
+    if (has(contact.id)) return;
+    _diaries.insert(0, contact);
+    notifyListeners();
+  }
+
+  void updateSnippet(String id, String snippet, String time, {String? prompt}) {
+    final idx = _diaries.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    _diaries[idx] =
+        _diaries[idx].copyWith(lastSnippet: snippet, lastTime: time);
+    // Move to front (pinned ordering handled by getter).
+    if (!_pinned.contains(id)) {
+      final updated = _diaries.removeAt(idx);
+      _diaries.insert(0, updated);
+    }
+    // Voice notes (🎙) and video clips (🎬) count toward the streak.
+    if (snippet.contains('🎙') || snippet.contains('🎬')) {
+      _recordSend(id);
+    }
+    notifyListeners();
+  }
+
+  void remove(String id) {
+    _diaries.removeWhere((d) => d.id == id);
+    _pinned.remove(id);
+    _muted.remove(id);
+    _favourites.remove(id);
+    _locked.remove(id);
+    _archived.remove(id);
+    _streakDays.remove(id);
+    _lastSentDate.remove(id);
+    _streakJustBroke.remove(id);
+    _brokeStreakPreviousDays.remove(id);
+    _justResumed.remove(id);
+    _milestoneReached.remove(id);
+    _jarredEntries.remove(id);
+    _occasionTag.remove(id);
+    _entries.remove(id);
+    notifyListeners();
+  }
+
+  // ── Per-diary actions ─────────────────────────────────────────────────────
+
+  void togglePin(String id) {
+    _pinned.contains(id) ? _pinned.remove(id) : _pinned.add(id);
+    notifyListeners();
+  }
+
+  void toggleMute(String id) {
+    _muted.contains(id) ? _muted.remove(id) : _muted.add(id);
+    notifyListeners();
+  }
+
+  void toggleFavourite(String id) {
+    _favourites.contains(id)
+        ? _favourites.remove(id)
+        : _favourites.add(id);
+    notifyListeners();
+  }
+
+  void toggleLock(String id) {
+    _locked.contains(id) ? _locked.remove(id) : _locked.add(id);
+    notifyListeners();
+  }
+
+  void archive(String id) {
+    _archived.add(id);
+    notifyListeners();
+  }
+
+  void unarchive(String id) {
+    _archived.remove(id);
+    notifyListeners();
+  }
+
+  void clearChat(String id) {
+    final idx = _diaries.indexWhere((d) => d.id == id);
+    if (idx == -1) return;
+    _diaries[idx] = _diaries[idx].copyWith(
+      lastSnippet: '🎙 Tap to send your first voice note',
+      lastTime: 'Now',
+    );
+    _entries.remove(id); // clear all entries too
+    notifyListeners();
+  }
+
+  /// Blocks = permanent removal from the list.
+  void block(String id) => remove(id);
+}
+

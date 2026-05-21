@@ -1,0 +1,40 @@
+class AppRoutes {
+  AppRoutes._();
+
+  static const splash = '/';
+  static const onboardingFilm = '/onboarding-film';
+  static const onboardingIntro = '/intro';
+  static const preCommit         = '/pre-commit';
+  static const relationshipSelect = '/relationship-select';
+  static const phoneNumber = '/phone';
+  static const otpVerify = '/otp';
+  static const nameEntry = '/name-entry';
+  static const inviteRecipient = '/invite-recipient';
+  static const welcomeHome = '/welcome-home';
+  static const home = '/home';
+  static const createGroup = '/create-group';
+  static const memoryTree = '/memory-tree';
+  static const diaryThread = '/diary-thread';
+  static const settings = '/settings';
+  static const voiceRecord = '/record';
+  static const videoRecord = '/record-video';
+  static const family = '/family';
+  static const memoryDetail = '/memory-detail';
+  static const invite = '/invite';
+  static const inviteAccept = '/invite-accept';
+  static const connectFirst = '/connect-first';
+  static const occasionPlan = '/occasion';
+  static const profile = '/profile';
+  static const groupThread = '/group-thread';
+  static const firstSend = '/first-send';
+  static const discover = '/discover';
+  static const memoryBook = '/memory-book';
+  static const wish = '/wish';
+  static const flicker = '/flicker';
+  static const streakMilestone = '/streak-milestone';
+  static const anniversary    = '/anniversary';
+  static const onThisDay = '/on-this-day';
+  static const memoryJar = '/memory-jar';
+  static const people = '/people';
+  static const personalJournal = '/personal-journal';
+}

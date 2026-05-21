@@ -1,0 +1,961 @@
+================================================================================
+  SAANJH — PRODUCT DESIGN AUDIT & IMPLEMENTATION PROMPTS
+  Generated: May 2026 | Based on full codebase read
+================================================================================
+
+This file contains prioritised, self-contained implementation prompts derived
+from a deep audit of every screen, widget, service, and design token in Saanjh.
+Each prompt can be pasted directly as a Claude Code task.
+
+Priority levels:
+  [CRITICAL]     — Bug or broken core flow. Fix immediately.
+  [HIGH IMPACT]  — Meaningfully improves retention, emotion, or usability.
+  [EXPERIMENTAL] — Forward-looking. Build after core is solid.
+
+================================================================================
+  SECTION 1 — CRITICAL BUGS & BROKEN FLOWS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 1 [CRITICAL] — Fix DiaryThreadScreen: _entries is always empty
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In lib/frontend/screens/diary_thread/diary_thread_screen.dart, the entries
+list is declared as a top-level module-level variable:
+
+  final _entries = <_Entry>[];
+
+This list is never populated from DiaryStore. Methods like _togglePlay(int idx)
+access _entries[idx], but the list is always empty at runtime, meaning the
+diary thread renders nothing and will throw a RangeError on any play tap.
+
+FIX:
+Replace the top-level _entries declaration with an instance variable on
+_DiaryThreadScreenState. Populate it inside a ListenableBuilder or override
+didChangeDependencies to map DiaryStore.instance.entriesFor(widget.diaryId)
+into _Entry objects. The _Entry model already has all needed fields. Map each
+DiaryEntry (from diary_store.dart) to _Entry using its id, type, createdAt,
+transcript, path, durationSeconds, and whether entry.fromMe is true.
+Re-render the list whenever DiaryStore notifies. Remove the top-level
+final _entries declaration entirely.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 2 [CRITICAL] — Persist Me screen toggle settings to SharedPreferences
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In lib/frontend/screens/me/me_screen.dart, _notifOn and _onThisDay are plain
+local bool variables initialised to true. Every app restart resets them to
+true regardless of what the user toggled. These are real user preferences that
+must survive restarts.
+
+FIX:
+Add a _loadPrefs() async method in _MeScreenState.initState() that reads
+SharedPreferences keys 'pref_notif_on' and 'pref_on_this_day_on' and sets
+state. Wrap each toggle in a _savePrefs() call that writes back to
+SharedPreferences when the user flips the switch. Also wire _notifOn to
+NotificationService.instance.setEnabled(bool) and _onThisDay to
+OnThisDayService.instance.setEnabled(bool) so the preference actually
+takes effect across the app.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 3 [CRITICAL] — Memory Tree filter chips don't filter the MonthDetailSheet
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In lib/frontend/screens/memory_tree/memory_tree_screen.dart, the _FilterRow
+sets _filter (_MType.voice or _MType.video) in _MemoryTreeScreenState, but
+_filter is never passed to _TreeCanvas or _MonthDetailSheet. When a node is
+tapped and the month sheet opens, it shows all entries regardless of the active
+filter. Users can select the Voice filter and still see video entries in the
+sheet — the filter has no effect.
+
+FIX:
+Pass _filter down to _MonthDetailSheet as a nullable _MType? parameter. Inside
+_MonthDetailSheetState._entries(), add a filter step after collecting entries:
+if filter == _MType.voice, keep only entries where entry.type == 'voice'.
+If _MType.video, keep only 'video'. Also pass _filter to _TreeCanvas so the
+_TreePainter can dim or hide node types that don't match the active filter
+(reduce non-matching node alpha to 0.25). Add a 'Photo' chip to _FilterRow
+since 'photo' is a valid node type in _drawNodes().
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 4 [CRITICAL] — _updateMonthKeys() called inside build() is O(n²) per frame
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In _TreeCanvasState, _updateMonthKeys() iterates all diaries and all entries
+on every build call (including every animation frame from the 6-second breathe
+controller). This is O(diaries × entries) per 60fps animation frame and will
+cause jank as the entry count grows.
+
+FIX:
+Move _updateMonthKeys() out of build(). Call it once in initState() and again
+via a DiaryStore.instance listener (addListener in initState, removeListener
+in dispose). Cache the results as _monthKeys, _reactionNodeIndices, and
+_monthMoodEnergies on the state object. The AnimatedBuilder that drives the
+CustomPainter will still repaint on breathe ticks, but the expensive data
+processing will only run when the store actually changes. Wrap the CustomPaint
+builder to only pass the cached values.
+
+================================================================================
+  SECTION 2 — DESIGN SYSTEM GAPS (Fix before scaling to more screens)
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 5 [HIGH IMPACT] — Add missing semantic color tokens to AppColors
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+Several raw hex values are hardcoded throughout the codebase instead of using
+AppColors tokens:
+  - Color(0xFF130A10) appears in AlertDialog backgrounds, MonthDetailSheet —
+    this should be AppColors.modalSurface
+  - Color(0xFFFF453A) appears in delete/block action text — should be
+    AppColors.destructive
+  - Color(0xFF30D158) appears in onboarding slide 3 glow — should be
+    AppColors.successGreen
+  - Color(0xFFBF5AF2) appears for video-type nodes and chips — should be
+    AppColors.violet
+  - Color(0xFF0A84FF) appears for photo nodes — should be AppColors.azure
+
+FIX:
+In lib/frontend/theme/app_colors.dart, add:
+
+  static const modalSurface  = Color(0xFF130A10);
+  static const destructive   = Color(0xFFFF453A);
+  static const successGreen  = Color(0xFF30D158);
+  static const violet        = Color(0xFFBF5AF2);
+  static const azure         = Color(0xFF0A84FF);
+
+Then do a project-wide find-and-replace of all the raw hex values with the
+named tokens. This makes future theme changes a one-line edit.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 6 [HIGH IMPACT] — Add missing AppTypography styles: caption & timestamp
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+AppTypography defines display, title, serifItalic, devanagari, body, label,
+button, eyebrow — but has no caption style (needed for timestamps like "Jan 4 ·
+Voice", reaction dates, duration labels) and no monospace style (needed for
+timecodes on the record screen). Currently label() is being used at size 10.5,
+11, 12 with different colors, weight, and ad-hoc parameters — creating drift.
+
+FIX:
+In lib/frontend/theme/app_typography.dart, add:
+
+  static TextStyle caption({double size = 11, Color? color}) =>
+      GoogleFonts.inter(
+        fontSize: size,
+        fontWeight: FontWeight.w400,
+        height: 1.3,
+        letterSpacing: 0.01 * size,
+        color: color ?? AppColors.textFaint,
+      );
+
+  static TextStyle timestamp({Color? color}) =>
+      GoogleFonts.inter(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        fontFeatures: [const FontFeature.tabularFigures()],
+        color: color ?? AppColors.textMuted,
+      );
+
+Replace all label(size: 10.5/11) used for secondary metadata with caption().
+Replace the timer display in RecordScreen with timestamp().
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 7 [HIGH IMPACT] — Add missing AppMotion durations and stagger utility
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+AppMotion only has fast(200ms), medium(480ms), slow(900ms), hero(1100ms),
+breatheSlow(8s), breatheLogo(5s). Missing:
+  - page: standard page entry duration (matches CupertinoPageTransitionsBuilder ~350ms)
+  - xSlow: for full-screen reveal (StreakMilestone enterCtrl uses 1000ms inline)
+  - A stagger(int index) helper for list item entry animations
+
+FIX:
+In lib/frontend/theme/app_motion.dart, add:
+
+  static const page   = Duration(milliseconds: 350);
+  static const xSlow  = Duration(milliseconds: 1000);
+  static const xxSlow = Duration(milliseconds: 1600);
+
+  // Returns staggered delay for list item at [index].
+  static Duration stagger(int index, {int baseMs = 60}) =>
+      Duration(milliseconds: baseMs * index);
+
+Replace inline Duration(milliseconds: 1000) in StreakMilestoneScreen with
+AppMotion.xSlow. Use stagger() in the diary list, memory jar list, and
+onboarding slides to make items animate in sequentially.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 8 [HIGH IMPACT] — Add a unified elevation/shadow token system
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+Box shadows are defined inline throughout (BoxShadow with arbitrary blurRadius,
+offset, color combinations). The CTA button in SaanjhEmptyState uses
+blurRadius:28/offset:Offset(0,12)/alpha:0.40, while FilterChip uses nothing,
+and the ember FAB uses a different value. No system = no visual consistency.
+
+FIX:
+In lib/frontend/theme/app_colors.dart (or a new app_shadows.dart), add:
+
+  class AppShadows {
+    AppShadows._();
+
+    // Soft glow for interactive elements (buttons, active chips).
+    static List<BoxShadow> emberGlow({double intensity = 0.40}) => [
+      BoxShadow(
+        color: AppColors.ember.withValues(alpha: intensity),
+        blurRadius: 28,
+        offset: const Offset(0, 8),
+      ),
+    ];
+
+    // Elevation for floating cards (memory jar overlay, share cards).
+    static List<BoxShadow> float = [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.55),
+        blurRadius: 40,
+        offset: const Offset(0, 16),
+      ),
+    ];
+
+    // Subtle lift for list cards.
+    static List<BoxShadow> card = [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.22),
+        blurRadius: 12,
+        offset: const Offset(0, 4),
+      ),
+    ];
+  }
+
+Replace all inline BoxShadow definitions with AppShadows calls.
+
+================================================================================
+  SECTION 3 — HIGH IMPACT UX IMPROVEMENTS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 9 [HIGH IMPACT] — Animate SaanjhEmptyState entry with fade + slide
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+SaanjhEmptyState appears instantly with no animation. On the first launch of
+any empty screen (diary thread, memory tree, people), it just pops in, breaking
+the premium feel of a product where everything else is animated. This is the
+most emotionally important moment (user has no content yet — the app is asking
+them to trust it) and it's visually dead.
+
+FIX:
+In lib/frontend/widgets/saanjh_empty_state.dart, convert SaanjhEmptyState to a
+StatefulWidget with a single AnimationController (duration: AppMotion.slow).
+Play it forward in initState. Apply:
+  - FadeTransition wrapping the entire Column
+  - SlideTransition with Tween<Offset>(begin: Offset(0, 0.04), end: Offset.zero)
+    using CurvedAnimation with AppMotion.easeOut
+
+The subtle upward drift (4% of height) + fade communicates "this space is
+waiting for you" rather than "nothing here."
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 10 [HIGH IMPACT] — Show unlistened badge count on DiaryCard in home list
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+The diary list on the home screen (tab 0) shows contacts but gives no signal
+about how many unlistened voice notes exist per contact. Users have no urgency
+or pull to open a specific diary. This is a core retention driver for async
+messaging apps (think iMessage unread count) — it's missing entirely.
+
+FIX:
+In the _DiaryList / _DiaryCard widget in home_screen.dart:
+  1. Compute unlisten count: DiaryStore.instance.entriesFor(diary.id)
+     .where((e) => !e.isMine && !e.listened).length
+  2. If count > 0, render SaanjhBadge (already exists in widgets/) in the
+     top-right of the avatar, showing the count (cap display at '9+')
+  3. Sort the diary list so contacts with unlistened entries appear first
+     (above pinned contacts). Use this sort key:
+       unlisten count > 0 → priority 3
+       isPinned → priority 2
+       default → priority 1
+  4. Animate the badge in with a spring scale (easeSpring, 200ms) when it
+     first appears, and out when count drops to 0.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 11 [HIGH IMPACT] — Replace inline AlertDialogs with a shared SaanjhDialog
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+Delete, block, clear chat, and archive all use identical inline AlertDialog
+construction in home_screen.dart with repeated:
+  - backgroundColor: const Color(0xFF130A10) (not a token)
+  - shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20))
+  - Text styles repeated
+
+This makes future theme changes require N edits. More importantly, the
+AlertDialog doesn't match Saanjh's visual language — it's a plain Material
+dialog on a custom dark app.
+
+FIX:
+Create lib/frontend/widgets/saanjh_dialog.dart with a static show() method:
+
+  static Future<bool> showDestructive(
+    BuildContext context, {
+    required String title,
+    required String body,
+    required String confirmLabel,
+  })
+
+Style it like the SaanjhSheet: rounded top corners, AppColors.modalSurface
+background, Cormorant Garamond title, Inter body. The confirm button uses
+AppColors.destructive text. Animate entry with a scale 0.92→1.0 + fade.
+Replace all 4 showDialog() calls in home_screen.dart with SaanjhDialog.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 12 [HIGH IMPACT] — Add "last active" signal to diary list cards
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+Diary cards in the home list show the contact name and relation but no temporal
+signal — no indication of when the last exchange happened. For an async diary
+app, "last active 3 days ago" is a critical social pressure signal that drives
+return visits. Without it, all diaries look equally dormant.
+
+FIX:
+In the diary card widget, compute lastActivity as the most recent entry
+createdAt across DiaryStore.instance.entriesFor(diary.id). Format it:
+  - < 1 hour:  "just now"
+  - < 24h:     "Xh ago"
+  - < 7 days:  "Mon", "Tue", etc.
+  - >= 7 days: "Jan 4"
+  - No entries: "No messages yet"
+
+Display this below the contact name in AppTypography.caption() with color
+AppColors.textFaint. If lastActivity is > 5 days ago and the relationship type
+is 'parent' or 'partner', subtly pulse the card border with an amber glow
+(animate border color between borderSoft and ember at 12% opacity) to create
+a gentle re-engagement nudge.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 13 [HIGH IMPACT] — Pulse window-closed state needs a re-engagement UI
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In pulse_screen.dart, _Phase.windowClosed is a dead-end. The user sees it when
+they've already pulsed today, but there's no UI described for this state.
+This is the most important re-engagement moment in the entire app — the user
+opened Saanjh specifically to pulse someone, and we're just blocking them with
+nothing constructive.
+
+FIX:
+When _phase == _Phase.windowClosed, render a soft "Pulse sent today" state
+with:
+  1. A dim heartbeat circle (the main orb at 30% opacity, still breathing slowly)
+  2. Text (Cormorant Garamond italic, 22pt): "Already with you today."
+  3. Sub-text: "Come back tomorrow to pulse again."
+  4. Below: a horizontal strip of "Meanwhile, record a voice note →" CTA
+     that navigates to voiceRecord for the target diary.
+  5. If a received pulse exists (receivedToday != null): show
+     "💛 [Name] pulsed you at [time]" in the closed state rather than blocking.
+This turns a dead-end into a moment of emotional content and redirects energy.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 14 [HIGH IMPACT] — Make the Morning Overlay handle the no-contacts case
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+MorningOverlay shows a hold-to-pulse UI in the morning. But if the user has no
+contacts yet (DiaryStore.instance.diaries.isEmpty), the pulse hold will do
+nothing meaningful. The overlay needs a specific state for new users to guide
+them to their first connection instead of confusing them with a disabled pulse.
+
+FIX:
+At the top of MorningOverlay build(), check:
+  final hasContacts = DiaryStore.instance.diaries.isNotEmpty;
+
+If !hasContacts, render a different body:
+  - Title (Cormorant Garamond 28pt italic): "Good morning."
+  - Sub: "Saanjh is quieter without the people you love."
+  - CTA button (AppColors.emberGradient): "Invite someone →"
+    navigates to AppRoutes.inviteRecipient and closes the overlay.
+  - Skip link (textFaint): "Later" — dismisses.
+
+If hasContacts, render the existing hold-to-pulse UI as-is.
+This prevents a confusing first-morning experience for new users.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 15 [HIGH IMPACT] — Add an entry point for Personal Journal in main nav
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+PersonalJournalScreen exists (lib/frontend/screens/personal_journal/) and
+AppRoutes.personalJournal is defined, but there is no visible entry point in
+the main 4-tab navigation (Diaries → Pulse → Memory Tree → Me). Users cannot
+discover it. This is a high-value retention feature (private writing habit) that
+is completely hidden.
+
+FIX:
+Option A (Recommended): Add a "Journal" entry point inside the Me screen
+(_MeScreen) between the stats card and the free-forever card. Style it as a
+full-width surface card with a book icon, "My Journal" title, and the count
+of private entries as a badge. Tap navigates to personalJournal route.
+
+Option B: Add a 5th tab to the bottom nav if the navigation load allows.
+Use a notebook icon, label 'Journal'. KeepAlive it in the PageView.
+
+Option A is less disruptive to the current nav model. Implement Option A.
+Also add a FAB on the PersonalJournalScreen itself for quick entry.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 16 [HIGH IMPACT] — Memory Jar: make the surface deterministic, not 1-in-5
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In home_screen.dart, _maybeShowJarMemory() uses math.Random().nextInt(5) != 0
+to suppress the jar memory 80% of the time. This means users can go 5+ sessions
+without ever seeing a jarred memory, even if they have many. The Memory Jar is
+a key emotional delight feature — it should be predictable enough to become a
+"what did I jar last time?" habit.
+
+FIX:
+Replace the random gate with a time-based gate. In SharedPreferences, store
+'jar_last_shown_ms' as the timestamp when a jar memory was last surfaced.
+In _maybeShowJarMemory():
+  1. Read 'jar_last_shown_ms'. If null or if DateTime.now() is > 18 hours since
+     last shown, proceed to show a jarred memory.
+  2. After showing, write DateTime.now().millisecondsSinceEpoch to
+     'jar_last_shown_ms'.
+  3. Keep the morning conflict guard (don't show if isMorning).
+  4. Choose the jarred entry to show by rotating through them in order (not
+     randomly) so users see all their starred memories over time.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 17 [HIGH IMPACT] — On This Day: build a full-screen cinematic reveal
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+OnThisDayScreen exists and shows past memories from the same calendar date.
+But the home screen only shows a OnThisDayBanner (a strip widget) — the actual
+screen is reachable but not memorable. "On This Day" is the highest-emotion
+feature in the app (nostalgia trigger, proof of time passing) and deserves a
+cinematic full-screen first encounter, not just a tap on a banner.
+
+FIX:
+When OnThisDayService.instance.matchesFor(today.month, today.day) is non-empty
+AND today is the first open of the day (use a SharedPreferences gate like
+MorningService uses), show a full-screen cinematic overlay BEFORE the morning
+overlay (or as an alternative if it's not morning). The overlay should:
+  1. Dark background with a subtle amber particle drift (reuse winter particles
+     pattern from _TreePainter but in amber, not white).
+  2. Cormorant Garamond display (52pt): "On this day…"
+  3. Italic sub: the date label (e.g. "May 18, two years ago")
+  4. Show the first matching entry's transcript as a pull-quote.
+  5. Play button to hear the voice note directly in the overlay.
+  6. Dismiss gesture (swipe down or tap background).
+This turns On This Day from a list screen into a ritual moment.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 18 [HIGH IMPACT] — Streak milestone: wire the trigger from DiaryThread
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+StreakMilestoneScreen exists and has beautiful animations (breathe, burst, enter
+controllers, double haptic). But there is no visible trigger in DiaryThread or
+anywhere else that pushes to AppRoutes.streakMilestone. The milestone screen
+exists in isolation — users can never see it through normal usage.
+
+FIX:
+In diary_thread_screen.dart, after a voice/video send completes (in the callback
+from RecordScreen), check:
+  final streak = DiaryStore.instance.streakDays(widget.diaryId);
+  final milestones = [3, 7, 14, 30, 60, 100, 365];
+  if (milestones.contains(streak)) {
+    // navigate to streak milestone
+    context.push(AppRoutes.streakMilestone, extra: {
+      'diaryId': widget.diaryId,
+      'contactName': _contact?.displayName ?? 'them',
+      'milestone': streak,
+    });
+  }
+
+Also add a SharedPreferences guard ('streak_milestone_shown_{diaryId}_{n}') so
+the same milestone is never shown twice for the same diary + streak combination.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 19 [HIGH IMPACT] — Onboarding: add emotional pre-commitment before auth
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+The 3-slide OnboardingIntro goes directly to RelationshipSelect then phone auth.
+The user hasn't made any emotional investment before being asked for their phone
+number. "Who is this for?" is never asked before auth. Users may drop off during
+OTP because they haven't decided who they want to connect with yet.
+
+Also: Slide 3 says "No subscription. No ads. No catch." but Memory Book (₹399)
+exists. This creates a trust violation on the first impression. Fix the copy.
+
+FIX:
+1. After slide 3, before RelationshipSelect: add a single "Who do you want to
+   stay close to?" screen. Show 4 large tappable cards:
+   👩‍👧 Parent / Child · 💑 Partner · 👫 Best friend · 👨‍👩‍👧‍👦 Family
+   User taps one. This selection is stored and personalises subsequent copy.
+
+2. Change slide 3 copy:
+   OLD: "No subscription. No ads. No catch."
+   NEW: "Free to use. Always. Your memories can also live as a beautiful
+        printed book — when you're ready."
+   This is honest about the memory book without making it feel like a catch.
+
+3. RelationshipSelect should pre-select the card the user just tapped in step 1,
+   so it feels like a confirmation, not a repeat question.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 20 [HIGH IMPACT] — DiaryThread: implement scroll-based historical color shift
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+In diary_thread_screen.dart, _scrollFraction is tracked (0.0 at top, 1.0 at
+bottom of scroll) and is intended for a "historical colour shift" — presumably
+making older messages feel more sepia/faded as you scroll back in time. The
+scroll listener is wired and _scrollFraction updates, but the value is never
+used in the build method. The emotional storytelling feature is wired but
+invisible.
+
+FIX:
+Pass _scrollFraction to the scaffold background. As the user scrolls toward the
+past (fraction increases), interpolate the scaffold background:
+  Color.lerp(
+    AppColors.ink,         // present: warm dark
+    const Color(0xFF080508), // past: cooler, more desaturated
+    _scrollFraction * 0.4,
+  )
+Also interpolate a subtle warm amber gradient overlay behind messages: as
+scrollFraction increases, reduce its opacity (present = ember glow present,
+past = ember glow fades). This makes scrolling back in time feel like
+genuinely travelling through memory — a cinematic and unique interaction.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 21 [HIGH IMPACT] — Add a "Share your Memory Tree" feature
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+The Memory Tree is visually unique and emotionally rich (seasonal, health-based,
+breathing). It is the most shareable visual in the entire app. Yet there is no
+share mechanism on the Memory Tree screen. MilestoneShareCard and VoiceShareCard
+exist in widgets/ — but no TreeShareCard.
+
+FIX:
+Add a share icon button (top-right of MemoryTreeScreen header, next to the
+"MOMENTS" eyebrow). On tap:
+  1. Capture the _TreeCanvas as an image using RepaintBoundary + toImage().
+  2. Compose a share card: tree image centered, Saanjh logo bottom-left,
+     stat line bottom-right ("X moments · X years · [Season] [Year]").
+  3. Use ShareCardService (already exists) to save and share via platform
+     share sheet.
+  4. Add a subtle "Share your tree →" text link at the bottom of _BookBanner
+     as a secondary CTA below the Memory Book option.
+
+The tree image + season makes every share unique — spring trees look different
+from winter ones — driving curiosity and app installs.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 22 [HIGH IMPACT] — Add playback speed control to DiaryThread (real audio)
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+DiaryThread has _playbackSpeed = 1.0 with the comment "visual only until backend
+audio wired". The play button advances an AnimationController timed to the entry
+duration, but no actual audio file is played. This is a major gap — the core
+feature of the app (hearing a loved one's voice) doesn't work through the
+thread UI. RecordScreen has audio recording (using path), but DiaryThread
+doesn't play from _Entry.path.
+
+FIX:
+Integrate just_audio (or audioplayers) package for playback in DiaryThreadScreen:
+  1. Declare an AudioPlayer? _player in state.
+  2. In _togglePlay(idx), if entry.path is non-empty, load and play the file:
+       _player = AudioPlayer()..setFilePath(entry.path);
+       _player!.play();
+  3. Dispose _player in dispose().
+  4. Replace the AnimationController duration with _player.duration.
+  5. Wire _playbackSpeed: on 1x/1.5x/2x tap, call _player!.setSpeed(speed).
+     Remove the "visual only" comment.
+  6. Add a WaveformBar that reflects actual playback position using
+     _player.positionStream.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 23 [HIGH IMPACT] — Memory Tree: add interactive pinch-to-zoom on the canvas
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+The Memory Tree canvas is a fixed-size CustomPaint inside a SliverToBoxAdapter.
+The tree nodes represent months — with many entries (>9 months), future nodes
+won't even appear because the painter only has 9 hardcoded node positions. There
+is no zoom, pan, or way to see a tree with >9 months of data. The tree will
+visually stagnate after 9 months of use — a critical long-term retention failure.
+
+FIX:
+1. Wrap _TreeCanvas in an InteractiveViewer with:
+     minScale: 0.8, maxScale: 2.4, constrained: false
+   This gives immediate pinch-to-zoom without layout changes.
+2. Expand _drawNodes() to support > 9 nodes: add a second radial ring of nodes
+   for months 10–18, using a slightly different radius and angle set. Use a
+   spiral layout algorithm (polar coordinates: r = baseRadius + ring * gap,
+   θ = index * goldenAngle) so the tree can grow gracefully.
+3. Cap visible nodes at min(monthKeys.length, 24) to prevent performance
+   degradation for very old accounts.
+4. Add a scroll-to-recent button (↓ chevron FAB) that animates the
+   InteractiveViewer back to identity transform when the user has zoomed/panned.
+
+================================================================================
+  SECTION 4 — RETENTION & EMOTIONAL ENGAGEMENT
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 24 [HIGH IMPACT] — DiaryWeather: surface tree health as a daily motivation
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+DiaryWeather (sunny/clearingUp/partlyCloudy/overcast/quiet) drives tree health
+which drives visual richness. This is a brilliant mechanic — but it's invisible.
+Users have no idea their tree is getting "overcast" or "quiet" because there's
+nothing that communicates this outside of the tree screen itself. The tree
+screen is tab 3 — most users won't check it daily.
+
+FIX:
+1. In _DiariesTab on home (tab 0), below the diary list, add a small ambient
+   weather line for each diary contact whose DiaryWeather is 'overcast' or
+   'quiet'. Show it as a subtle banner under their card:
+     "🌥 [Name]'s tree is getting quiet. Say something."
+   Use AppTypography.caption() in AppColors.textFaint. Tap → opens diary thread.
+
+2. In the home screen bottom nav, if ANY diary has weather == 'quiet', add a
+   small amber dot indicator on the Diaries tab icon (similar to how a
+   notification badge works).
+
+3. On the Memory Tree header, show the current weather as a text eyebrow:
+   "🌤 CLEARING UP" or "☀ SUNNY" using AppTypography.eyebrow(). This makes
+   the weather mechanic legible for the first time.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 25 [HIGH IMPACT] — Add a weekly "memory digest" notification strategy
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+NotificationService exists but there is no weekly summary notification. For a
+habit-forming app, a weekly emotional recap is one of the highest-retention
+notification types (think: Spotify Wrapped cadence but weekly). Currently
+notifications are only reactive (pulse received, new entry, anniversary).
+
+FIX:
+In NotificationService or a new WeeklyDigestService, schedule a local
+notification every Sunday at 8pm:
+  - Title: "Your week with [Name]" (pick the most active diary)
+  - Body: "X voice notes · [streak] days in a row · [Season] on your tree"
+  - Tap action: opens memoryTree
+
+Use flutter_local_notifications with a weekly recurring trigger.
+Gate behind the user's _notifOn preference (in MeScreen).
+On the first Sunday after install, ask the user's permission with the context
+"Get a weekly memory digest?" rather than a cold permission prompt.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 26 [HIGH IMPACT] — Add a "1-year anniversary" full-screen celebration
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+diaryAnniversaries is already computed in DiaryStore and detected on home open.
+The anniversary banner routes directly to AppRoutes.memoryBook with the ₹399
+upsell. This is emotionally wrong — the anniversary is a deeply meaningful
+moment (one year of capturing a relationship) and the app's response is
+immediately "buy something." Users will feel the extractive intent.
+
+FIX:
+Create a new AnniversaryScreen (or reuse a lightly modified StreakMilestoneScreen
+template) with:
+  1. Entry animation: number "1" (or "2", "3") in Cormorant Garamond 96pt,
+     ember gradient fill, fade in with easeSpring.
+  2. Headline: "One year with [Name]." (serifItalic)
+  3. Stats: "X voice notes · X video clips · [season count] seasons together"
+  4. Auto-play the first memory from year 1 in a subtle ambient audio player.
+  5. A "See your tree →" primary CTA (goes to memory tree, not memory book).
+  6. A secondary soft link: "Turn it into a Memory Book →" (the upsell)
+
+Change the anniversary banner in home_screen.dart to route here instead of
+directly to memoryBook.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 27 [HIGH IMPACT] — Add voice reaction delight: reaction ripples on tree nodes
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+Voice reactions are a unique mechanic — you react to a past memory with your
+own voice note. When reactions exist, a 4-pointed star marker appears on the
+tree node. But the reaction system has no delight moment: no animation when
+a new reaction arrives, no special reveal when you discover a reaction.
+The intimacy of "someone reacted to a memory you recorded months ago" is
+deeply emotional and currently invisible.
+
+FIX:
+1. When a new reaction is received (DiaryStore notifies with a newly-reacted
+   entry), animate the corresponding tree node: trigger a 3-ring ripple
+   expansion (like a water drop) centered on the node's canvas position.
+   Use a new RippleController in _TreeCanvasState.
+
+2. In the MonthDetailSheet _EntryRow, when reactions exist and the user
+   expands them, animate each reaction row sliding in from the left with a
+   staggered delay (AppMotion.stagger(i)) — not just appearing.
+
+3. Add a haptic (lightImpact) when the reaction section expands.
+
+4. In the notification banner, when a reaction arrives, the banner message
+   should read: "💛 [Name] reacted to your [Month] memory" — differentiate it
+   from a regular new entry notification.
+
+================================================================================
+  SECTION 5 — GROWTH & VIRALITY
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 28 [HIGH IMPACT] — Wire VoiceShareCard to trigger after every 10th entry
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+VoiceShareCard widget exists in lib/frontend/widgets/voice_share_card.dart and
+ShareCardService exists — but no code triggers the share card to appear. The
+primary virality mechanic (sharing a moment from Saanjh) is built but never
+activated. Every time a voice note is sent is a potential organic growth moment.
+
+FIX:
+In RecordScreen, after a successful send (in the send completion callback):
+  1. Read a SharedPreferences counter 'total_sends'. Increment it.
+  2. On every 10th send (counter % 10 == 0), push to a ShareMomentSheet:
+     a mini bottom sheet that shows VoiceShareCard with the just-sent transcript
+     (if available) and the contact name.
+  3. The sheet has: "Share this moment" primary CTA (uses ShareCardService) and
+     "Maybe later" dismiss.
+  4. Also trigger after the FIRST send ever (counter == 1) as a "share your
+     first Saanjh moment" — high emotional weight, high shareability.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 29 [HIGH IMPACT] — Parent invite flow: add a simplified invite for low-tech parents
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+ParentInviteEntryScreen exists but the standard invite flow (invite_recipient)
+appears to be the same for all relationships. Parents — especially in Indian
+families — are often less tech-savvy and need a radically simpler onboarding.
+If the parent can't set up Saanjh, the whole product fails for the adult child.
+
+FIX:
+In ParentInviteEntryScreen, implement a "guided setup" mode:
+  1. Step 1: "Send them this link" — generates a deep link. CTA: "Send via
+     WhatsApp" (most Indian parents use WhatsApp). Use url_launcher to open
+     WhatsApp with pre-composed message: "Beta/Beti ne tumhe Saanjh pe invite
+     kiya hai. Yahan click karo: [link]"
+  2. Step 2: "Or set it up for them" — if the adult child has the parent's
+     phone in hand, a guided minimal setup (just name + OTP) on the parent's
+     device, with all app complexity hidden.
+  3. The parent's first experience should be: open app → big play button →
+     hear child's first voice note → hold to pulse back. Nothing else.
+Add a 'isParentMode' flag to UserStore that simplifies the parent's home screen
+to just: one large contact card, a giant record button, and a giant play button.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 30 [HIGH IMPACT] — Add a "Gift a Memory Book" flow for gifting occasions
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+The Memory Book (₹399 print) is positioned as a self-purchase, but gifting is
+a much stronger purchase trigger. Diwali, birthdays, anniversaries are all
+occasions where gifting a printed memory book (of your shared voice/video diary)
+is deeply meaningful and has no competitor. The OccasionPlan screen exists but
+doesn't connect to Memory Book gifting.
+
+FIX:
+In OccasionPlanScreen and MemoryBookScreen, add a "Gift this book" option:
+  1. User selects a diary (the relationship) and an occasion (Birthday/Diwali/
+     Anniversary from OccasionService).
+  2. The book is pre-filled with entries from that diary.
+  3. Add a gift message field (free text, 200 chars max).
+  4. Add a "Deliver to their address" flow.
+  5. In the anniversary banner and streak milestone screens, add a soft
+     "Gift them this moment as a book →" CTA.
+  6. Price the gifted book with gift wrapping at ₹499 (vs ₹399 self-purchase)
+     to capture gift premium without feeling extractive.
+
+================================================================================
+  SECTION 6 — EXPERIMENTAL / FORWARD-LOOKING
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 31 [EXPERIMENTAL] — AI-generated "memory summary" card after every 10 entries
+────────────────────────────────────────────────────────────────────────────────
+
+CONCEPT:
+TranscriptionService already converts voice to text. moodEnergy is already
+analyzed per entry via AudioAnalysisService. With 10+ transcript entries per
+diary, you have enough data to generate an emotionally resonant summary.
+
+IMPLEMENTATION DIRECTION:
+Create a MemorySummaryService that:
+  1. Every time a diary reaches a multiple of 10 entries, collects all
+     transcripts for that diary.
+  2. Sends them to a Claude API call (use claude-haiku-4-5 for cost efficiency)
+     with a prompt: "These are voice note transcripts between [me] and [Name].
+     Write a 3-sentence memory portrait of this relationship — warm, specific,
+     intimate. Never generic."
+  3. Caches the result in SharedPreferences as 'memory_summary_{diaryId}'.
+  4. Surfaces it on the DiaryThread header as a collapsible quote card —
+     Cormorant Garamond italic, sepia-toned, ephemeral.
+  5. Also surfaces it on the Memory Tree screen above the stats card.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 32 [EXPERIMENTAL] — Ambient home screen widget: living tree thumbnail
+────────────────────────────────────────────────────────────────────────────────
+
+CONCEPT:
+HomeWidgetService already exists. The home screen widget currently presumably
+shows a static summary. A widget that shows a miniature version of the Memory
+Tree — with the current season and health state — would be a daily ambient
+reminder that the relationship is "alive" or "quiet", creating pull back to
+the app without a notification.
+
+IMPLEMENTATION DIRECTION:
+  1. Use home_widget package to render a small (2x2) widget.
+  2. Generate a 180×180px PNG of the _TreePainter (current season, health,
+     breathe = 0.5 static) using PictureRecorder + toImage().
+  3. Pass this image to the widget alongside:
+     - Weather state text ("Sunny" / "Overcast")
+     - Most recent contact name
+     - Unlistened count badge
+  4. Update via HomeWidgetService.instance.update() whenever DiaryStore notifies.
+  5. On widget tap, deep link to memoryTree route directly.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 33 [EXPERIMENTAL] — Voice-prompted AI journaling in Personal Journal
+────────────────────────────────────────────────────────────────────────────────
+
+CONCEPT:
+The PersonalJournal is private. But "what do I write?" is a common barrier to
+journaling. Since Saanjh already has AI (transcription, occasion planning,
+mood analysis), the next step is AI-prompted voice journaling: the app asks
+you something about your day or your relationships, you answer by voice.
+
+IMPLEMENTATION DIRECTION:
+  In PersonalJournalScreen, add a "Prompt me" button:
+  1. When tapped, fetch a rotating daily prompt from a local list (50 prompts
+     covering gratitude, memory, relationship reflection). Example prompts:
+     - "What moment this week do you want to remember in 10 years?"
+     - "What did [Name] do recently that made you smile?"
+     - "What would 20-year-old you think of today?"
+  2. Display the prompt in Cormorant Garamond italic, large, centered.
+  3. A microphone button below: user holds to record (same RecordScreen flow
+     but with isPrivateReflection: true and the prompt passed).
+  4. After recording, the transcript is saved alongside the prompt as a
+     prompt-answer pair in the journal entry.
+  5. Over time, prompt-answer pairs can be surfaced as "On This Day" moments
+     in the private journal.
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 34 [EXPERIMENTAL] — Memory Tree evolution: multi-year forest view
+────────────────────────────────────────────────────────────────────────────────
+
+CONCEPT:
+Today the Memory Tree shows one tree per relationship (or one combined tree).
+After 3+ years of use, the user has a "forest" — one tree per year per
+relationship. Each year's tree is a different season snapshot. This is the
+category-defining long-term vision: Saanjh becomes a forest of your
+relationships through time.
+
+IMPLEMENTATION DIRECTION:
+  1. Add a "Forest" view toggle on the MemoryTreeScreen (next to filter chips).
+  2. In Forest mode, render a horizontal ScrollView of miniature trees —
+     one per diary-year combination. Each mini-tree is 90px wide and uses
+     the actual season/health of that year's entries.
+  3. Tapping a mini-tree expands to that year's full tree with a hero animation.
+  4. The forest background shifts from ink toward a deep forest green as
+     more trees appear.
+  5. This view should be the shareable artifact for long-term users:
+     "5 years of my family on Saanjh" — a visual legacy.
+
+================================================================================
+  SECTION 7 — ACCESSIBILITY
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 35 [HIGH IMPACT] — Add Semantics labels to all custom gesture widgets
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+GestureDetector is used throughout (FilterChip, BookBanner, EmptySeed, pulse
+hold orb, diary cards) without Semantics labels. Screen readers (TalkBack on
+Android, VoiceOver on iOS) cannot announce these interactive elements. This
+is both an accessibility failure and a potential App Store rejection risk.
+
+FIX:
+Wrap every GestureDetector that is a primary interactive element with Semantics:
+  Semantics(
+    label: 'Filter by voice notes',
+    button: true,
+    child: GestureDetector(...)
+  )
+
+Key elements to fix:
+  - _FilterChip: label 'Filter by [Voice/Video/Photo]'
+  - _EmptySeed: label 'Plant first memory, double tap to start'
+  - _BookBanner: label 'Print your Memory Book, from 399 rupees'
+  - PulseScreen hold orb: label 'Hold to send a pulse'
+  - MorningOverlay hold: label 'Hold to send morning pulse'
+  - All _DiaryCard items: label '[Name], [Relation], X unlistened notes'
+
+Also ensure the Pulse hold gesture has a Semantics.onTap for tap-mode users
+(already implemented as _pulseTapMode — just needs Semantics announcement).
+
+────────────────────────────────────────────────────────────────────────────────
+PROMPT 36 [HIGH IMPACT] — Verify ember color contrast ratios on text elements
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM:
+AppColors has a dedicated 'emberAccessible' (#FFA040) token with the comment
+"WCAG AA-safe amber for small text on dark backgrounds (≥4.5:1 on inkDeep)".
+But AppColors.emberBright (#FFB870) and AppColors.emberWarm (#FF9A40) are used
+for small text in multiple places (eyebrow labels, filter chip labels, pulse
+strip label) where contrast may fall below 4.5:1 against AppColors.ink.
+
+FIX:
+Audit every text element using ember, emberWarm, or emberBright as color:
+  1. AppTypography.eyebrow() calls with ember/emberBright color
+  2. FilterChip label text with widget.color (AppColors.emberWarm)
+  3. Pulse strip "PULSE" eyebrow (emberBright)
+  4. _StatItem value text (emberWarm)
+
+For any element at or below 14pt that uses a non-accessible amber:
+  Replace with AppColors.emberAccessible.
+For elements at 16pt+ (bold) or 18pt+ (regular), emberWarm is acceptable per
+WCAG AA large text rules (3:1 ratio).
+
+Add a comment in AppColors explaining which tokens pass AA for what sizes.
+
+================================================================================
+  IMPLEMENTATION ORDER (recommended)
+================================================================================
+
+Week 1 — Fix critical bugs first (Prompts 1-4)
+Week 2 — Design system foundations (Prompts 5-8)
+Week 3 — Core UX gaps that break the emotional contract (Prompts 9-15)
+Week 4 — Retention mechanics (Prompts 16-18, 24-27)
+Week 5 — Growth wiring (Prompts 19-21, 28-30)
+Week 6 — Audio playback + tree scale (Prompts 22-23)
+Week 7+ — Accessibility (Prompts 35-36) then Experimental (Prompts 31-34)
+
+================================================================================
+  END OF AUDIT
+================================================================================
