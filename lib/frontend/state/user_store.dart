@@ -13,10 +13,16 @@ class UserStore extends ChangeNotifier {
   bool _isLoggedIn   = false;
   bool _isOnboarded  = false;
   String _userId     = '';
+  String _verificationId = ''; // Firebase phone auth verification ID
 
-  bool get isLoggedIn   => _isLoggedIn;
-  bool get isOnboarded  => _isOnboarded;
-  String get userId     => _userId;
+  bool get isLoggedIn       => _isLoggedIn;
+  bool get isOnboarded      => _isOnboarded;
+  String get userId         => _userId;
+  String get verificationId => _verificationId;
+
+  void setVerificationId(String id) {
+    _verificationId = id;
+  }
 
   // ── Profile state ──────────────────────────────────────────────────────────
   String _name        = '';
