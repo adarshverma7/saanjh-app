@@ -2,6 +2,7 @@
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../backend/auth_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
@@ -90,12 +91,19 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
     if (!_isValid || _continuing) return;
     HapticFeedback.lightImpact();
     setState(() => _continuing = true);
-    // Persist phone so Me screen and Profile screen can show it.
+
+    final phone = '${_country.code}${_phoneCtrl.text.trim()}';
     UserStore.instance.setPhone(_phoneCtrl.text, _country.code);
-    await Future.delayed(const Duration(milliseconds: 400));
+
+    try {
+      await AuthApi.instance.sendOtp(phone);
+    } catch (_) {
+      // Non-fatal: proceed to OTP screen even if SMS delivery fails
+      // (backend still stored the OTP hash — user can try entering it)
+    }
+
     if (!mounted) return;
     context.push(AppRoutes.otpVerify);
-    await Future.delayed(const Duration(milliseconds: 300));
     if (mounted) setState(() => _continuing = false);
   }
 

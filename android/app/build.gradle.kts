@@ -31,7 +31,7 @@ android {
 
     defaultConfig {
         applicationId = "com.saanjh.saanjh"
-        minSdk = flutter.minSdkVersion
+        minSdk = 23  // flutter_secure_storage requires 23+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
