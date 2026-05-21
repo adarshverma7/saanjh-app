@@ -48,6 +48,7 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
   final _focusNode = FocusNode();
   _Country _country = _countries[0];
   bool _continuing = false;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -90,21 +91,33 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
   Future<void> _continue() async {
     if (!_isValid || _continuing) return;
     HapticFeedback.lightImpact();
-    setState(() => _continuing = true);
+    setState(() { _continuing = true; _errorMessage = null; });
 
     final phone = '${_country.code}${_phoneCtrl.text.trim()}';
     UserStore.instance.setPhone(_phoneCtrl.text, _country.code);
 
-    try {
-      await AuthApi.instance.sendOtp(phone);
-    } catch (_) {
-      // Non-fatal: proceed to OTP screen even if SMS delivery fails
-      // (backend still stored the OTP hash — user can try entering it)
-    }
-
-    if (!mounted) return;
-    context.push(AppRoutes.otpVerify);
-    if (mounted) setState(() => _continuing = false);
+    await AuthApi.instance.sendOtp(
+      phone: phone,
+      onCodeSent: (verificationId) {
+        // Store verificationId so OTP screen can use it
+        UserStore.instance.setVerificationId(verificationId);
+        if (mounted) {
+          context.push(AppRoutes.otpVerify);
+          setState(() => _continuing = false);
+        }
+      },
+      onError: (error) {
+        if (mounted) setState(() { _continuing = false; _errorMessage = error; });
+      },
+      onAutoVerified: (credential) async {
+        // Android auto-read — skip OTP screen entirely
+        final result = await AuthApi.instance.verifyWithCredential(credential);
+        if (result != null && mounted) {
+          await UserStore.instance.loginWith(result);
+          context.go(result.isOnboarded ? AppRoutes.home : AppRoutes.nameEntry);
+        }
+      },
+    );
   }
 
   void _showCountryPicker() {
