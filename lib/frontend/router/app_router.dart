@@ -144,8 +144,12 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.inviteAccept,
         name: 'inviteAccept',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: InviteAcceptScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: InviteAcceptScreen(
+            inviterName: extra['inviterName'] as String? ?? '',
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.createGroup,
@@ -162,8 +166,12 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.diaryThread,
         name: 'diaryThread',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: DiaryThreadScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: DiaryThreadScreen(
+            diaryId: extra['diaryId'] as String? ?? '',
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.settings,
@@ -200,8 +208,12 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.groupThread,
         name: 'groupThread',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: GroupThreadScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: GroupThreadScreen(
+            diaryId: extra['diaryId'] as String?,
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.firstSend,
