@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "853634976119",
+    "project_id": "saanjh-fe1a8",
+    "storage_bucket": "saanjh-fe1a8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853634976119:android:7002b4c12f24c46d88f972",
+        "android_client_info": {
+          "package_name": "com.saanjh.saanjh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAP8-d7QALuP_BVpxfK-dNPUtKSV2491eA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
