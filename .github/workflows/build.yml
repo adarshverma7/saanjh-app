@@ -5,12 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Allow manual trigger from GitHub Actions tab
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'apk'
+        type: choice
+        options: [apk, aab]
 
 jobs:
   build:
-    name: Build Signed AAB
+    name: Build Android
     runs-on: ubuntu-latest
 
     steps:
@@ -48,15 +54,12 @@ jobs:
           storeFile=keystore.jks
           EOF
 
-      - name: Build release AAB (signed)
+      # ── Main branch: build signed AAB for Play Store ───────────────────────
+      - name: Build signed AAB
         if: github.ref == 'refs/heads/main'
         run: flutter build appbundle --release
 
-      - name: Build debug APK (for PRs — no signing needed)
-        if: github.ref != 'refs/heads/main'
-        run: flutter build apk --debug
-
-      - name: Upload AAB artifact
+      - name: Upload AAB
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -64,10 +67,15 @@ jobs:
           path: build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      - name: Upload debug APK artifact
+      # ── Non-main: build release APK (directly installable on phone) ────────
+      - name: Build release APK (installable)
+        if: github.ref != 'refs/heads/main'
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload release APK (arm64 — most Android phones)
         if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: saanjh-debug-${{ github.run_number }}
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: saanjh-install-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           retention-days: 7
