@@ -1,5 +1,6 @@
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'api_client.dart';
 
@@ -9,25 +10,74 @@ class AuthApi {
 
   Dio get _dio => ApiClient.instance.dio;
 
-  // ── OTP ────────────────────────────────────────────────────────────────────
+  // ── Firebase Phone Auth ────────────────────────────────────────────────────
 
-  /// Sends a 6-digit OTP to the given phone number.
-  /// [phone] must be in E.164 format e.g. "+919876543210"
-  Future<void> sendOtp(String phone) async {
-    await _dio.post('/auth/otp/send', data: {'phone': phone});
+  /// Step 1: triggers Firebase to send OTP SMS.
+  /// [onCodeSent] is called with the verificationId when SMS is sent.
+  /// [onError] is called with an error message if it fails.
+  Future<void> sendOtp({
+    required String phone,
+    required void Function(String verificationId) onCodeSent,
+    required void Function(String error) onError,
+    void Function(PhoneAuthCredential)? onAutoVerified,
+  }) async {
+    await FirebaseAuth.instance.verifyPhoneNumber(
+      phoneNumber: phone,
+      timeout: const Duration(seconds: 60),
+      verificationCompleted: (credential) {
+        // Auto-verified on Android (SMS auto-read)
+        onAutoVerified?.call(credential);
+      },
+      verificationFailed: (e) {
+        onError(e.message ?? 'Verification failed. Check your phone number.');
+      },
+      codeSent: (verificationId, _) {
+        onCodeSent(verificationId);
+      },
+      codeAutoRetrievalTimeout: (_) {},
+    );
   }
 
-  /// Verifies OTP and returns tokens + user info.
-  /// Returns null on failure (handled by caller).
-  Future<AuthResult?> verifyOtp(String phone, String otp) async {
-    final deviceInfo = await _buildDeviceInfo();
+  /// Step 2: verifies the OTP entered by the user.
+  /// Returns null if the OTP is wrong.
+  Future<AuthResult?> verifyOtp({
+    required String verificationId,
+    required String smsCode,
+  }) async {
     try {
-      final res = await _dio.post('/auth/otp/verify', data: {
-        'phone': phone,
-        'otp': otp,
+      final credential = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: smsCode,
+      );
+      return await _signInWithCredential(credential);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'invalid-verification-code' ||
+          e.code == 'invalid-verification-id') {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  /// For auto-verified credentials (Android SMS auto-read).
+  Future<AuthResult?> verifyWithCredential(PhoneAuthCredential credential) =>
+      _signInWithCredential(credential);
+
+  // ── Backend exchange ───────────────────────────────────────────────────────
+
+  Future<AuthResult?> _signInWithCredential(
+      PhoneAuthCredential credential) async {
+    try {
+      final userCred =
+          await FirebaseAuth.instance.signInWithCredential(credential);
+      final idToken = await userCred.user?.getIdToken();
+      if (idToken == null) return null;
+
+      final deviceInfo = await _buildDeviceInfo();
+      final res = await _dio.post('/auth/firebase/verify', data: {
+        'id_token':    idToken,
         'device_id':   deviceInfo.deviceId,
         'device_type': deviceInfo.deviceType,
-        'os_version':  deviceInfo.osVersion,
         'app_version': '1.0.0',
       });
       return AuthResult.fromJson(res.data as Map<String, dynamic>);
@@ -39,6 +89,7 @@ class AuthApi {
   Future<void> logout(String deviceId) async {
     try {
       await _dio.post('/auth/logout', data: {'device_id': deviceId});
+      await FirebaseAuth.instance.signOut();
     } catch (_) {}
     await ApiClient.instance.clearTokens();
   }
@@ -64,7 +115,8 @@ class AuthApi {
         );
       }
     } catch (_) {
-      return _DeviceInfo(deviceId: 'unknown', deviceType: 'android', osVersion: '0');
+      return _DeviceInfo(
+          deviceId: 'unknown', deviceType: 'android', osVersion: '0');
     }
   }
 }
@@ -73,11 +125,10 @@ class _DeviceInfo {
   final String deviceId;
   final String deviceType;
   final String osVersion;
-  const _DeviceInfo({
-    required this.deviceId,
-    required this.deviceType,
-    required this.osVersion,
-  });
+  const _DeviceInfo(
+      {required this.deviceId,
+      required this.deviceType,
+      required this.osVersion});
 }
 
 class AuthResult {
@@ -98,8 +149,9 @@ class AuthResult {
   factory AuthResult.fromJson(Map<String, dynamic> j) => AuthResult(
         accessToken:  j['access_token']  as String,
         refreshToken: j['refresh_token'] as String,
-        userId:       (j['user'] as Map<String, dynamic>)['id'] as String,
-        isNewUser:    j['is_new_user']   as bool? ?? false,
-        isOnboarded:  (j['user'] as Map<String, dynamic>)['is_onboarded'] as bool? ?? false,
+        userId: (j['user'] as Map<String, dynamic>)['id'] as String,
+        isNewUser:   j['is_new_user']   as bool? ?? false,
+        isOnboarded: (j['user'] as Map<String, dynamic>)['is_onboarded']
+                as bool? ?? false,
       );
 }
