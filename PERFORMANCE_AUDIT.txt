@@ -1,0 +1,497 @@
+================================================================================
+  SAANJH — PERFORMANCE OPTIMISATION AUDIT
+  Generated: 2026-05-19
+  Scope: Full codebase (lib/**/*.dart)
+================================================================================
+
+Already fixed in this session
+──────────────────────────────
+1. home_screen.dart — TickerMode on background PageView tabs (pauses all
+   AnimationControllers in Pulse/MemoryTree/Me when not the active tab)
+2. home_screen.dart — _pagePos float tracking so TickerMode enables as soon as
+   a tab starts sliding in (fixes freeze-on-entry glitch)
+3. glow_background.dart — RepaintBoundary around animated glow orb
+4. glow_background.dart — WidgetsBindingObserver pauses animation when app is
+   backgrounded/inactive
+5. pulse_screen.dart — breatheCtrl does NOT repeat in windowClosed or sent
+   phases (stopped 2x GPU blur calls running at 60fps for nothing)
+6. pulse_screen.dart — removed outer bloom + inner core from _PulseBgPainter
+   (removed 2x MaskFilter.blur per frame; button's own _HoldPainter is enough)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  CRITICAL  (fix before release)
+────────────────────────────────────────────────────────────────────────────────
+
+C-1  SharedPreferences.getInstance() called repeatedly — no cache
+     Files:  weekly_digest_service.dart (4 separate calls per session)
+             morning_service.dart (every public method)
+             on_this_day_service.dart (every public method)
+             notification_service.dart (_loadPrefs + setEnabled)
+             user_store.dart (loadPrefs + setParentMode)
+     Problem: SharedPreferences.getInstance() is an async factory that checks
+              the cache itself, but still goes through a Future resolution on
+              every call. Calling it 10–20× per session inside hot paths adds
+              up; on low-end Android it can stall the UI thread briefly.
+     Fix:    Add a static cached field to each service/store and initialise
+             once in the first call or at app start:
+
+               static SharedPreferences? _prefs;
+               static Future<SharedPreferences> _getPrefs() async {
+                 return _prefs ??= await SharedPreferences.getInstance();
+               }
+
+             Better: use a single app-level init in main.dart and pass or
+             inject the instance so no service has to await it mid-flow:
+
+               // main.dart
+               final prefs = await SharedPreferences.getInstance();
+               runApp(SaanjhApp(prefs: prefs));
+
+C-2  setState() inside animation tick listener — morning_overlay.dart
+     Lines:  ~76 (_onHoldTick callback)
+     Problem: _onHoldTick() is called on every frame of _holdCtrl (up to 60×/s).
+              It calls setState(() {}) which schedules a full widget rebuild of
+              MorningOverlay. This is the same pattern that caused the O(n²)
+              audit finding in MemoryTree.
+     Fix:    Remove setState from _onHoldTick. Wrap only the widgets that
+             actually depend on _holdCtrl.value in AnimatedBuilder so they
+             rebuild in isolation without triggering the whole overlay rebuild:
+
+               AnimatedBuilder(
+                 animation: _holdCtrl,
+                 builder: (_, __) => _HoldRing(progress: _holdCtrl.value),
+               )
+
+C-3  weekly_digest_service.dart — FlutterLocalNotificationsPlugin + timezone
+     database initialised in init() which is called from HomeScreen.initState()
+     Lines:  56–69
+     Problem: Loading the full timezone database (timezone package) is a
+              synchronous-looking but internally heavy I/O operation. Doing it
+              during app startup (initState) can delay first frame.
+     Fix:    Move the init() call to a postFrameCallback so the first frame
+             renders before timezone data loads:
+
+               // in HomeScreen.initState():
+               WidgetsBinding.instance.addPostFrameCallback((_) {
+                 WeeklyDigestService.instance.init();
+               });
+
+             (Already using postFrameCallback for permission ask; pull the
+             init() call into the same callback.)
+
+
+────────────────────────────────────────────────────────────────────────────────
+  HIGH  (significant user-visible impact on low-end devices)
+────────────────────────────────────────────────────────────────────────────────
+
+H-1  _WavePainter creates Random(42) on every paint call
+     File:   record_screen.dart  ~line 989
+     Problem: new Random(42) is constructed inside paint() which is called every
+              frame while recording. Object allocation inside paint() forces GC
+              pressure and defeats the fixed seed purpose.
+     Fix:    Move to a class-level final field:
+
+               class _WavePainter extends CustomPainter {
+                 static final _rng = Random(42);
+                 ...
+               }
+
+H-2  _grouped() in memory_jar_screen recomputes on every build
+     File:   memory_jar_screen.dart  ~line 43–56
+     Problem: _grouped() iterates all diaries and all their entries on every
+              build() call. If DiaryStore has many entries, this is O(diaries ×
+              entries) on every repaint — including repaints triggered by
+              unrelated parent rebuilds.
+     Fix:    Cache the grouped result and invalidate only when DiaryStore
+             notifies:
+
+               List<_Group>? _cachedGroups;
+
+               @override
+               void initState() {
+                 super.initState();
+                 DiaryStore.instance.addListener(_onStoreChange);
+                 _cachedGroups = _grouped();
+               }
+
+               void _onStoreChange() =>
+                 setState(() => _cachedGroups = _grouped());
+
+               // In build(): use _cachedGroups instead of calling _grouped()
+
+H-3  Missing RepaintBoundary on animated CustomPainter widgets
+     Files:  record_screen.dart — _Waveform widget (AnimatedBuilder + CustomPaint)
+             memory_jar_screen.dart — _JarPainter (AnimatedBuilder + CustomPaint)
+             on_this_day_screen.dart — _ReflectionTile play button animation
+     Problem: Without RepaintBoundary, when the AnimatedBuilder ticks it can
+              mark ancestor render objects dirty, causing larger subtrees to
+              repaint than necessary.
+     Fix:    Wrap the CustomPaint (not the AnimatedBuilder) in RepaintBoundary:
+
+               AnimatedBuilder(
+                 animation: ctrl,
+                 builder: (_, __) => RepaintBoundary(
+                   child: CustomPaint(painter: MyPainter(...)),
+                 ),
+               )
+
+H-4  _JarPainter uses MaskFilter.blur on every frame
+     File:   memory_jar_screen.dart  ~line 261
+     Problem: MaskFilter.blur(BlurStyle.normal, 16) inside paint() runs a GPU
+              blur pass every animation tick. This is the same issue already
+              fixed in pulse_screen.dart's background painter.
+     Fix:    The RadialGradient already provides a soft falloff; the blur is
+             redundant. Remove the maskFilter line from _JarPainter._drawBlob()
+             (or equivalent method). Visual difference is negligible.
+
+H-5  notification_service handleStoreChange() runs 4 checks on every
+     DiaryStore notification
+     File:   notification_service.dart  ~line 147–150
+     Problem: _checkListenerReceipts(), _checkStreakMilestones(),
+              _checkStreakBreaks(), _checkNewReactions() all run on every
+              notifyListeners() from DiaryStore — which fires on every recording,
+              every reaction, every snippet update.
+     Fix:    Track a dirty flag or compare a lightweight "version" counter:
+
+               int _lastStoreVersion = 0;
+
+               void handleStoreChange() {
+                 final v = DiaryStore.instance.version; // add this counter
+                 if (v == _lastStoreVersion) return;
+                 _lastStoreVersion = v;
+                 // ... run checks
+               }
+
+             Alternatively, only run the relevant check based on what changed
+             (requires DiaryStore to emit a change-type enum).
+
+H-6  record_screen.dart — animation controllers start before recording begins
+     File:   record_screen.dart  ~line 187–188
+     Problem: _pulseCtrl.repeat() and _waveCtrl.repeat() are started in
+              _startVoice() but if the screen is disposed while recording is
+              still in progress (e.g. system interruption), there is no mounted
+              guard before the repeat() call, which can throw on a disposed
+              vsync.
+     Fix:    Add mounted check before starting animations:
+
+               if (!mounted) return;
+               _pulseCtrl.repeat(reverse: true);
+               _waveCtrl.repeat();
+
+
+────────────────────────────────────────────────────────────────────────────────
+  MEDIUM  (noticeable on older devices; polish-level issues)
+────────────────────────────────────────────────────────────────────────────────
+
+M-1  on_this_day_screen.dart — matchesFor() called in build()
+     Lines:  ~53
+     Problem: svc.matchesFor(_browsing.month, _browsing.day) is O(n) over all
+              diary entries, called inside build(). If the screen rebuilds for
+              any reason (orientation, font scale), it recomputes the full match.
+     Fix:    Compute once in initState / didUpdateWidget and store in a field:
+
+               late List<OnThisDayEntry> _matches;
+
+               @override
+               void initState() {
+                 super.initState();
+                 _matches = svc.matchesFor(
+                   _browsing.month, _browsing.day);
+               }
+
+               void _onBrowsingChanged(DateTime d) {
+                 setState(() {
+                   _browsing = d;
+                   _matches = svc.matchesFor(d.month, d.day);
+                 });
+               }
+
+M-2  me_screen.dart — Offstage MilestoneShareCard rebuilds with every
+     ProfileStats rebuild
+     Lines:  ~976–1048
+     Problem: The Offstage share card is a complex widget that includes text
+              rendering, gradients, and layout. It rebuilds whenever ProfileStats
+              rebuilds (which happens on every DiaryStore notification).
+     Fix:    Wrap Offstage content in a const or memoised widget keyed on
+             bestDiary.id so it only rebuilds when the actual diary changes:
+
+               Offstage(
+                 child: KeyedSubtree(
+                   key: ValueKey(bestDiary?.id),
+                   child: MilestoneShareCard(...),
+                 ),
+               )
+
+M-3  personal_journal_screen.dart — _MiniWave generates bar list on every frame
+     Lines:  ~268–281
+     Problem: _MiniWave builds a List.generate() with bar heights every build.
+              If _MiniWave is inside an AnimatedBuilder, this allocation happens
+              60× per second.
+     Fix:    Pre-compute the static wave pattern as a final field:
+
+               class _MiniWave extends StatelessWidget {
+                 static final _bars = List.generate(
+                   18, (i) => 0.25 + 0.75 * sin(i * 0.6).abs(),
+                 );
+                 ...
+               }
+
+M-4  AppTypography methods create new TextStyle objects on every call
+     File:   app_typography.dart (used everywhere)
+     Problem: Every call to AppTypography.body(), .title(), .label() etc. calls
+              GoogleFonts.inter() / GoogleFonts.cormorantGaramond() which
+              constructs a new TextStyle object. In build() methods called
+              60× per second (AnimatedBuilders), this generates GC pressure.
+     Fix:    Cache the base TextStyles at class level and use copyWith() for
+             variants. Only the base weights/sizes that appear most often need
+             caching:
+
+               // In app_typography.dart
+               static final _bodyBase = GoogleFonts.inter(
+                 fontSize: 15, fontWeight: FontWeight.w400,
+                 letterSpacing: -0.015, height: 1.4,
+               );
+
+               static TextStyle body({double size = 15, ...}) {
+                 if (size == 15 && weight == FontWeight.w400 && color == null)
+                   return _bodyBase;
+                 return _bodyBase.copyWith(fontSize: size, ...);
+               }
+
+             Priority: cache body, label, caption — used most in list views.
+
+M-5  contacts_service.dart — _simulateSaanjhMembership() recomputed on every
+     loadContacts() call
+     Lines:  ~97–100
+     Problem: The membership simulation hashes every contact's phone number on
+              each load. Contacts rarely change; results should be cached.
+     Fix:    Store results in a Map<String, bool> keyed by normalised phone
+             number after first computation. Invalidate only when system
+             contacts change (use addListener on FlutterContacts stream if
+             available, otherwise TTL of 1 hour).
+
+M-6  diary_thread_screen.dart — _buildEntries() called on every DiaryStore
+     notification regardless of which diary changed
+     Lines:  ~160–161
+     Problem: _onDiaryStoreChange() calls setState(() => _entries = _buildEntries())
+              on every notifyListeners() from DiaryStore, even if a different
+              diary changed.
+     Fix:    Guard with a quick check before rebuilding:
+
+               void _onDiaryStoreChange() {
+                 final newEntries = _buildEntries();
+                 if (newEntries.length == _entries.length &&
+                     newEntries.firstOrNull?.id == _entries.firstOrNull?.id) {
+                   return; // nothing relevant changed
+                 }
+                 setState(() => _entries = newEntries);
+               }
+
+             A more robust fix: DiaryStore emits the changed diary ID so
+             screens can filter.
+
+M-7  saanjh_stagger.dart — stagger delays computed on every build
+     Problem: If SaanjhStagger computes Interval curves inside build(), these
+              objects are recreated on every rebuild. Stagger widgets are often
+              in list items which can rebuild frequently.
+     Fix:    Cache the CurvedAnimation list as a late final field in State,
+             or make SaanjhStagger a StatefulWidget that computes curves once.
+
+M-8  ListenableBuilder in me_screen.dart rebuilds full nav row on any
+     diary change
+     Lines:  ~163–170
+     Problem: The nav row ListenableBuilder(listenable: DiaryStore.instance)
+              wraps a large layout. Any diary update (recording, reaction, etc.)
+              causes the entire nav row to rebuild even if the contact count
+              hasn't changed.
+     Fix:    Move the listenable scope inward to only wrap the Text/Badge that
+             shows counts. Keep the static parts outside the builder.
+
+M-9  on_this_day_screen.dart — multiple _EntryTile AnimationControllers
+     Lines:  ~266
+     Problem: Each _EntryTile has its own waveCtrl.repeat(). With many "on this
+              day" entries, you get N repeating controllers simultaneously when
+              the screen is open — each driving a paint call per frame.
+     Fix:    Use a single shared AnimationController from the parent screen and
+             pass it down to all tiles (same pattern as MemoryTree's breatheCtrl).
+             One controller → one ticker → one frame callback for all tiles.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  LOW  (clean-up / future-proofing)
+────────────────────────────────────────────────────────────────────────────────
+
+L-1  notification_service.dart — inline `months` array literal inside
+     _checkNewReactions() or equivalent notification builder
+     Fix:    Move to a private static const at class level.
+
+L-2  morning_service.dart — morningGreeting getter recomputes time on every
+     access
+     Fix:    Cache result for the current hour; invalidate at the top of each
+             hour or simply cache once per app session since morning doesn't
+             change mid-use.
+
+L-3  memory_jar_screen.dart — waveCtrl.repeat() runs even when jar list is
+     empty (no visible animation)
+     Fix:    Start animation only when groups.isNotEmpty:
+
+               if (groups.isNotEmpty) _waveCtrl.repeat(reverse: true);
+
+L-4  app_router.dart — verify GoRouter uses pageBuilder (lazy) not builder
+     (eager) for heavy screens like RecordScreen, MemoryBookScreen
+     Fix:    Use MaterialPage / CupertinoPage via pageBuilder for all routes so
+             Flutter doesn't instantiate the widget until navigation actually
+             happens.
+
+L-5  main.dart — verify flutter/services SystemChrome calls are batched
+     Fix:    If SystemChrome.setPreferredOrientations and
+             setSystemUIOverlayStyle are both called, batch into a single frame
+             with WidgetsBinding.instance.addPostFrameCallback.
+
+L-6  record_screen.dart — camera preview widget likely creates a new texture
+     on every setState rebuild of the parent
+     Fix:    Wrap CameraPreview in a const-keyed widget or ensure the camera
+             state is not part of the same setState scope as UI controls.
+
+L-7  anniversary_screen.dart — AudioPlayer loaded in initState even if user
+     never plays audio
+     Fix:    Lazy-init the player on first play tap, not in initState.
+
+L-8  share_card_service.dart — toImage(pixelRatio: 3.0) always uses 3×
+     regardless of device pixel ratio
+     Fix:    Use MediaQuery.devicePixelRatio.clamp(1.0, 3.0) so lower-end
+             devices don't render at unnecessarily high resolution for sharing.
+
+L-9  All screens — TextStyle objects passed inline to Text() widgets
+     (e.g., Text('x', style: AppTypography.body()))
+     Fix:    Extract repeated style combos into named const variables at the
+             top of each build method (or as static fields on the widget class)
+             to avoid recreating them on every build.
+
+L-10 pubspec.yaml — google_fonts loads fonts lazily from network on first use
+     Fix:    Add the three fonts as local assets (download .ttf files) and
+             register in pubspec.yaml under flutter.fonts. This removes the
+             network dependency and the HTTP fetch on cold start:
+
+               flutter:
+                 fonts:
+                   - family: CormorantGaramond
+                     fonts:
+                       - asset: assets/fonts/CormorantGaramond-SemiBold.ttf
+                         weight: 600
+                   - family: Inter
+                     fonts:
+                       - asset: assets/fonts/Inter-Regular.ttf
+                         weight: 400
+                       - asset: assets/fonts/Inter-SemiBold.ttf
+                         weight: 600
+
+
+────────────────────────────────────────────────────────────────────────────────
+  DEPENDENCY AUDIT
+────────────────────────────────────────────────────────────────────────────────
+
+Heavy packages (by estimated memory footprint):
+
+  speech_to_text ^7.0.0      ~15–25 MB   Native speech engine loaded on first
+                                          use. Currently only used in
+                                          TranscriptionService. Ensure engine
+                                          is released after transcription:
+                                          call stt.stop() + stt.cancel() when
+                                          done.
+
+  camera ^0.11.0             ~10–20 MB   Camera texture held in memory while
+                                          RecordScreen is mounted. Ensure
+                                          _camCtrl.dispose() is called on pop
+                                          (already done — verify the pop path
+                                          through GoRouter also triggers dispose).
+
+  just_audio ^0.9.40         ~5–10 MB    AudioPlayer instance per screen that
+                                          uses it. DiaryThreadScreen creates one
+                                          per play session — good. Confirm no
+                                          screen creates a player in initState
+                                          without user interaction.
+
+  flutter_local_notifications ~5–8 MB    Loads in HomeScreen init. Already
+  + timezone ^0.9.4                       recommended above to defer to
+                                          postFrameCallback (C-3).
+
+  home_widget ^0.7.0         ~2–4 MB     Initialised in HomeScreen initState.
+                                          Consider lazy-init on first diary
+                                          change, not on every app open.
+
+  shimmer ^3.0.0             <1 MB       Fine; used only during loading states.
+
+  share_plus ^10.1.2         <1 MB       Fine; invoked on demand.
+
+Packages that could be removed entirely:
+  None identified. All declared dependencies are actively used.
+
+
+────────────────────────────────────────────────────────────────────────────────
+  SUMMARY TABLE
+────────────────────────────────────────────────────────────────────────────────
+
+  Priority   ID    File(s)                          Short description
+  ─────────────────────────────────────────────────────────────────────────────
+  CRITICAL   C-1   5 service/store files            Cache SharedPreferences
+  CRITICAL   C-2   morning_overlay.dart             Remove setState from ticker
+  CRITICAL   C-3   weekly_digest_service.dart       Defer timezone init
+  HIGH       H-1   record_screen.dart               Move Random out of paint()
+  HIGH       H-2   memory_jar_screen.dart           Cache _grouped() result
+  HIGH       H-3   record/jar/on_this_day screens   RepaintBoundary on painters
+  HIGH       H-4   memory_jar_screen.dart           Remove MaskFilter.blur
+  HIGH       H-5   notification_service.dart        Version-gate store checks
+  HIGH       H-6   record_screen.dart               mounted guard before repeat
+  MEDIUM     M-1   on_this_day_screen.dart          Cache matchesFor in state
+  MEDIUM     M-2   me_screen.dart                   KeyedSubtree on share card
+  MEDIUM     M-3   personal_journal_screen.dart     Pre-compute wave bar list
+  MEDIUM     M-4   app_typography.dart              Cache base TextStyles
+  MEDIUM     M-5   contacts_service.dart            Cache membership results
+  MEDIUM     M-6   diary_thread_screen.dart         Guard entry list rebuild
+  MEDIUM     M-7   saanjh_stagger.dart              Cache stagger curves
+  MEDIUM     M-8   me_screen.dart                   Narrow ListenableBuilder
+  MEDIUM     M-9   on_this_day_screen.dart          Share one waveCtrl per screen
+  LOW        L-1   notification_service.dart        Static const months array
+  LOW        L-2   morning_service.dart             Cache greeting per hour
+  LOW        L-3   memory_jar_screen.dart           Skip waveCtrl when empty
+  LOW        L-4   app_router.dart                  Use pageBuilder on all routes
+  LOW        L-5   main.dart                        Batch SystemChrome calls
+  LOW        L-6   record_screen.dart               Key CameraPreview widget
+  LOW        L-7   anniversary_screen.dart          Lazy-init AudioPlayer
+  LOW        L-8   share_card_service.dart          Clamp pixelRatio to device
+  LOW        L-9   All screens                      Cache repeated TextStyles
+  LOW        L-10  pubspec.yaml                     Bundle fonts as local assets
+  ─────────────────────────────────────────────────────────────────────────────
+  Total: 28 items   Critical: 3   High: 6   Medium: 9   Low: 10
+
+
+────────────────────────────────────────────────────────────────────────────────
+  RECOMMENDED IMPLEMENTATION ORDER
+────────────────────────────────────────────────────────────────────────────────
+
+  Sprint 1 — RAM and startup (biggest user-visible gains on 1 GB devices)
+    C-1  SharedPreferences global cache
+    C-3  Defer timezone init to postFrameCallback
+    H-4  Remove MaskFilter.blur from _JarPainter
+    H-3  RepaintBoundary on record/jar/on_this_day painters
+    L-10 Bundle fonts locally (removes cold-start network fetch)
+
+  Sprint 2 — CPU / frame budget
+    C-2  Remove setState from morning_overlay tick listener
+    H-2  Cache _grouped() in memory jar
+    M-4  Cache base TextStyles in AppTypography
+    M-9  Share single waveCtrl across OnThisDay tiles
+    H-1  Move Random out of _WavePainter.paint()
+
+  Sprint 3 — Architecture hardening
+    H-5  Version-gate notification service store checks
+    M-6  Guard diary thread entry list rebuild
+    M-1  Cache matchesFor() in on_this_day state
+    C-1  (remaining store files not covered in sprint 1)
+    L-4  pageBuilder on all GoRouter routes
+
+================================================================================
+  END OF REPORT
+================================================================================
