@@ -119,8 +119,11 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     HapticFeedback.lightImpact();
     setState(() => _state = _VerifyState.verifying);
 
-    final phone = '${UserStore.instance.countryCode}${UserStore.instance.phone}';
-    final result = await AuthApi.instance.verifyOtp(phone, _code);
+    final verificationId = UserStore.instance.verificationId;
+    final result = await AuthApi.instance.verifyOtp(
+      verificationId: verificationId,
+      smsCode: _code,
+    );
 
     if (!mounted) return;
 
@@ -135,7 +138,6 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
       return;
     }
 
-    // Store tokens and update auth state
     await UserStore.instance.loginWith(result);
 
     setState(() => _state = _VerifyState.success);
@@ -143,7 +145,6 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     await Future.delayed(const Duration(milliseconds: 900));
     if (!mounted) return;
 
-    // Route based on onboarding status
     context.go(result.isOnboarded ? AppRoutes.home : AppRoutes.nameEntry);
   }
 
@@ -153,9 +154,11 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     _startResendTimer();
     setState(() {});
     final phone = '${UserStore.instance.countryCode}${UserStore.instance.phone}';
-    try {
-      await AuthApi.instance.sendOtp(phone);
-    } catch (_) {}
+    await AuthApi.instance.sendOtp(
+      phone: phone,
+      onCodeSent: (id) => UserStore.instance.setVerificationId(id),
+      onError: (_) {},
+    );
   }
 
   @override
