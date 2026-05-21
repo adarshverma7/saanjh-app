@@ -37,7 +37,7 @@ import '../screens/splash/splash_screen.dart';
 import '../screens/record/record_screen.dart';
 import '../screens/streak_milestone/streak_milestone_screen.dart';
 import '../screens/welcome_home/welcome_home_screen.dart';
-import '../../state/user_store.dart';
+import '../state/user_store.dart';
 import 'app_routes.dart';
 
 // Routes that don't require auth
