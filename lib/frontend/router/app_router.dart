@@ -148,6 +148,7 @@ class AppRouter {
           final extra = s.extra as Map<String, dynamic>? ?? {};
           return MaterialPage(child: InviteAcceptScreen(
             inviterName: extra['inviterName'] as String? ?? '',
+            inviterId:   extra['inviterId']   as String? ?? '',
           ));
         },
       ),
@@ -246,14 +247,26 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.streakMilestone,
         name: 'streak',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: StreakMilestoneScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: StreakMilestoneScreen(
+            diaryId:     extra['diaryId']     as String? ?? '',
+            contactName: extra['contactName'] as String? ?? '',
+            milestone:   extra['milestone']   as int?    ?? 7,
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.anniversary,
         name: 'anniversary',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: AnniversaryScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: AnniversaryScreen(
+            diaryId:     extra['diaryId']     as String? ?? '',
+            contactName: extra['contactName'] as String? ?? '',
+            years:       extra['years']       as int?    ?? 1,
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.onThisDay,
