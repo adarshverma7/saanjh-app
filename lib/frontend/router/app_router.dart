@@ -47,8 +47,6 @@ const _publicRoutes = {
   AppRoutes.splash,
   AppRoutes.onboardingFilm,
   AppRoutes.onboardingIntro,
-  AppRoutes.preCommit,           // onboarding step
-  AppRoutes.relationshipSelect,  // onboarding step
   AppRoutes.phoneNumber,
   AppRoutes.otpVerify,
   AppRoutes.nameEntry,           // post-OTP onboarding (user just logged in)
