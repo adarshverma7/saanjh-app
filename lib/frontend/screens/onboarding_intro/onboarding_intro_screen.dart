@@ -110,7 +110,7 @@ class _OnboardingIntroScreenState extends State<OnboardingIntroScreen>
 
   void _goToSignup() {
     HapticFeedback.lightImpact();
-    context.go(AppRoutes.phoneNumber);
+    context.push(AppRoutes.phoneNumber);
   }
 
   void _skip() {
