@@ -1,24 +1,29 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
-
-import '../theme/app_colors.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+import '../../backend/api_client.dart';
+import '../theme/app_colors.dart';
 
 class SaanjhContact {
   final String id;
   final String name;
-  final String phone;
+  final String phone;          // E.164 normalised (+91XXXXXXXXXX)
+  final String displayPhone;   // formatted for display
   final String initial;
   final Color avatarColor;
   final bool isOnSaanjh;
+  final String? saanjhName;    // their Saanjh display name, if on the app
 
   const SaanjhContact({
     required this.id,
     required this.name,
     required this.phone,
+    required this.displayPhone,
     required this.initial,
     required this.avatarColor,
     required this.isOnSaanjh,
+    this.saanjhName,
   });
 }
 
@@ -29,51 +34,69 @@ class ContactsService {
   List<SaanjhContact>? _cache;
 
   static const _palette = [
-    Color(0xFFE8720C), // ember
-    Color(0xFFFF6B8A), // rose
-    AppColors.successGreen, // jade
-    AppColors.azure, // sky
-    AppColors.violet, // dusk
-    Color(0xFF2EC4B6), // teal
-    Color(0xFFF4C430), // gold
-    Color(0xFFFF9F0A), // amber
+    Color(0xFFE8720C),
+    Color(0xFFFF6B8A),
+    AppColors.successGreen,
+    AppColors.azure,
+    AppColors.violet,
+    Color(0xFF2EC4B6),
+    Color(0xFFF4C430),
+    Color(0xFFFF9F0A),
   ];
 
-  // Check current permission status without prompting.
   Future<PermissionStatus> status() => Permission.contacts.status;
 
-  // Request permission and return whether it was granted.
   Future<bool> request() async {
     final result = await Permission.contacts.request();
     return result.isGranted;
   }
 
-  // Load and cache contacts. Returns empty list if permission denied.
+  /// Loads device contacts, calls the backend to check which are on Saanjh,
+  /// and returns the combined list. Caches the result.
   Future<List<SaanjhContact>> loadContacts() async {
     if (_cache != null) return _cache!;
 
-    final contacts = await FlutterContacts.getContacts(withProperties: true);
+    final raw = await FlutterContacts.getContacts(withProperties: true);
 
-    _cache = contacts
-        .where((c) => c.phones.isNotEmpty && c.displayName.trim().isNotEmpty)
-        .map((c) {
-          final name = c.displayName.trim();
-          final phone = _formatPhone(c.phones.first.number);
-          final initial = name.characters.first.toUpperCase();
-          final colorIdx = name.codeUnits.fold(0, (a, b) => a + b) % _palette.length;
-          final isOnSaanjh = _simulateSaanjhMembership(name, phone);
-          return SaanjhContact(
-            id: c.id,
-            name: name,
-            phone: phone,
-            initial: initial,
-            avatarColor: _palette[colorIdx],
-            isOnSaanjh: isOnSaanjh,
-          );
-        })
-        .toList();
+    // Build normalised phone map: e164 → contact
+    final entries = <({String id, String name, String e164, String display})>[];
+    for (final c in raw) {
+      if (c.phones.isEmpty || c.displayName.trim().isEmpty) continue;
+      final e164 = _toE164(c.phones.first.number);
+      if (e164 == null) continue;
+      entries.add((
+        id:      c.id,
+        name:    c.displayName.trim(),
+        e164:    e164,
+        display: _formatDisplay(e164),
+      ));
+    }
 
-    // Sort: Saanjh members first, then alphabetically within each group.
+    // Deduplicate by E.164
+    final seen = <String>{};
+    final unique = entries.where((e) => seen.add(e.e164)).toList();
+
+    // Check which are on Saanjh via backend
+    final onSaanjhMap = await _fetchSaanjhMembers(
+      unique.map((e) => e.e164).toList(),
+    );
+
+    _cache = unique.map((e) {
+      final colorIdx = e.name.codeUnits.fold(0, (a, b) => a + b) % _palette.length;
+      final onSaanjh = onSaanjhMap.containsKey(e.e164);
+      return SaanjhContact(
+        id:           e.id,
+        name:         e.name,
+        phone:        e.e164,
+        displayPhone: e.display,
+        initial:      e.name.characters.first.toUpperCase(),
+        avatarColor:  _palette[colorIdx],
+        isOnSaanjh:   onSaanjh,
+        saanjhName:   onSaanjh ? onSaanjhMap[e.e164] : null,
+      );
+    }).toList();
+
+    // Sort: Saanjh members first, then alphabetically
     _cache!.sort((a, b) {
       if (a.isOnSaanjh && !b.isOnSaanjh) return -1;
       if (!a.isOnSaanjh && b.isOnSaanjh) return 1;
@@ -91,35 +114,64 @@ class ContactsService {
   List<SaanjhContact> get cachedToInvite =>
       (_cache ?? []).where((c) => !c.isOnSaanjh).toList();
 
-  // Deterministically decide if a contact is "on Saanjh".
-  // NOTE: phone is stored unmasked so digit search works correctly.
-  // ~1 in 3 contacts will be marked as on Saanjh.
-  static bool _simulateSaanjhMembership(String name, String phone) {
-    final hash = name.codeUnits.fold(0, (a, b) => a + b) +
-        phone.replaceAll(RegExp(r'\D'), '').length;
-    return hash % 3 == 0;
+  // ── Private helpers ────────────────────────────────────────────────────────
+
+  /// Calls POST /connections/check-contacts with batches of 500.
+  /// Returns a map of e164 → saanjh display name (null if not set).
+  Future<Map<String, String?>> _fetchSaanjhMembers(List<String> phones) async {
+    if (phones.isEmpty) return {};
+
+    final result = <String, String?>{};
+
+    // Process in batches of 500
+    for (var i = 0; i < phones.length; i += 500) {
+      final batch = phones.sublist(i, (i + 500).clamp(0, phones.length));
+      try {
+        final res = await ApiClient.instance.dio.post(
+          '/connections/check-contacts',
+          data: {'phones': batch},
+        );
+        final list = (res.data as List<dynamic>?) ?? [];
+        for (final item in list) {
+          final map = item as Map<String, dynamic>;
+          result[map['phone'] as String] = map['name'] as String?;
+        }
+      } catch (_) {
+        // Network failure — degrade gracefully (all contacts shown as "not on Saanjh")
+      }
+    }
+
+    return result;
   }
 
-  static String _formatPhone(String raw) {
+  /// Converts any phone number format to E.164 (+91XXXXXXXXXX).
+  /// Returns null if the number can't be normalised.
+  static String? _toE164(String raw) {
     final digits = raw.replaceAll(RegExp(r'\D'), '');
-    // Indian number: 10 digits or 12 digits starting with 91
-    if (digits.length == 10) {
-      return '+91 ${digits.substring(0, 5)} ${digits.substring(5)}';
-    }
-    if (digits.length == 12 && digits.startsWith('91')) {
-      final d = digits.substring(2);
+    // Indian 10-digit
+    if (digits.length == 10) return '+91$digits';
+    // Indian with country code
+    if (digits.length == 12 && digits.startsWith('91')) return '+$digits';
+    if (digits.length == 13 && digits.startsWith('091')) return '+${digits.substring(1)}';
+    // US/Canada
+    if (digits.length == 11 && digits.startsWith('1')) return '+$digits';
+    if (digits.length == 10) return '+1$digits';
+    // International with +
+    if (raw.trimLeft().startsWith('+') && digits.length >= 8) return '+$digits';
+    // Skip very short or ambiguous
+    if (digits.length < 8) return null;
+    return null;
+  }
+
+  static String _formatDisplay(String e164) {
+    if (e164.startsWith('+91') && e164.length == 13) {
+      final d = e164.substring(3);
       return '+91 ${d.substring(0, 5)} ${d.substring(5)}';
     }
-    if (digits.length == 13 && digits.startsWith('091')) {
-      final d = digits.substring(3);
-      return '+91 ${d.substring(0, 5)} ${d.substring(5)}';
-    }
-    // US/Canada: 10 digits with country code 1
-    if (digits.length == 11 && digits.startsWith('1')) {
-      final d = digits.substring(1);
+    if (e164.startsWith('+1') && e164.length == 12) {
+      final d = e164.substring(2);
       return '+1 ${d.substring(0, 3)}-${d.substring(3, 6)}-${d.substring(6)}';
     }
-    // Fallback: just return the raw number as stored in contacts
-    return raw.trim();
+    return e164;
   }
 }
