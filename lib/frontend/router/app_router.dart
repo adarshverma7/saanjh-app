@@ -37,7 +37,17 @@ import '../screens/splash/splash_screen.dart';
 import '../screens/record/record_screen.dart';
 import '../screens/streak_milestone/streak_milestone_screen.dart';
 import '../screens/welcome_home/welcome_home_screen.dart';
+import '../../state/user_store.dart';
 import 'app_routes.dart';
+
+// Routes that don't require auth
+const _publicRoutes = {
+  AppRoutes.splash,
+  AppRoutes.onboardingFilm,
+  AppRoutes.onboardingIntro,
+  AppRoutes.phoneNumber,
+  AppRoutes.otpVerify,
+};
 
 class AppRouter {
   AppRouter._();
@@ -46,12 +56,26 @@ class AppRouter {
     initialLocation: AppRoutes.splash,
     debugLogDiagnostics: false,
     redirect: (context, state) async {
-      // On first launch only, intercept the splash and show the film.
-      if (state.fullPath == AppRoutes.splash) {
+      final path = state.fullPath ?? AppRoutes.splash;
+
+      // On first launch only, show the onboarding film
+      if (path == AppRoutes.splash) {
         final prefs = await SharedPreferences.getInstance();
         final hasSeen = prefs.getBool('has_seen_film') ?? false;
         if (!hasSeen) return AppRoutes.onboardingFilm;
       }
+
+      final isLoggedIn = UserStore.instance.isLoggedIn;
+      final isPublic   = _publicRoutes.contains(path);
+
+      // Not logged in trying to reach a private route → send to onboarding
+      if (!isLoggedIn && !isPublic) return AppRoutes.onboardingIntro;
+
+      // Logged in but landing on a public auth screen → send home
+      if (isLoggedIn && (path == AppRoutes.phoneNumber || path == AppRoutes.otpVerify)) {
+        return AppRoutes.home;
+      }
+
       return null;
     },
     routes: [

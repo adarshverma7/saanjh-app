@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../backend/auth_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
@@ -117,34 +118,44 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
     if (_state == _VerifyState.verifying) return;
     HapticFeedback.lightImpact();
     setState(() => _state = _VerifyState.verifying);
-    await Future.delayed(const Duration(milliseconds: 1400));
+
+    final phone = '${UserStore.instance.countryCode}${UserStore.instance.phone}';
+    final result = await AuthApi.instance.verifyOtp(phone, _code);
+
     if (!mounted) return;
 
-    if (_code == '000000') {
+    if (result == null) {
       HapticFeedback.vibrate();
       setState(() => _state = _VerifyState.error);
       await Future.delayed(const Duration(milliseconds: 1200));
       if (!mounted) return;
-      for (final c in _ctrls) {
-        c.clear();
-      }
+      for (final c in _ctrls) { c.clear(); }
       _nodes[0].requestFocus();
       setState(() => _state = _VerifyState.idle);
       return;
     }
 
+    // Store tokens and update auth state
+    await UserStore.instance.loginWith(result);
+
     setState(() => _state = _VerifyState.success);
     HapticFeedback.mediumImpact();
     await Future.delayed(const Duration(milliseconds: 900));
     if (!mounted) return;
-    context.go(AppRoutes.nameEntry);
+
+    // Route based on onboarding status
+    context.go(result.isOnboarded ? AppRoutes.home : AppRoutes.nameEntry);
   }
 
-  void _resend() {
+  Future<void> _resend() async {
     if (!_resendActive) return;
     HapticFeedback.selectionClick();
     _startResendTimer();
     setState(() {});
+    final phone = '${UserStore.instance.countryCode}${UserStore.instance.phone}';
+    try {
+      await AuthApi.instance.sendOtp(phone);
+    } catch (_) {}
   }
 
   @override
@@ -286,7 +297,7 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
                                   const TextSpan(text: 'Didn\'t receive it? '),
                                   WidgetSpan(
                                     child: GestureDetector(
-                                      onTap: _resend,
+                                      onTap: () => _resend(),
                                       child: Text(
                                         _resendActive
                                             ? 'Resend code'

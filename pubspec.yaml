@@ -28,6 +28,10 @@ dependencies:
   flutter_local_notifications: ^18.0.0
   timezone: ^0.9.4
   url_launcher: ^6.3.0
+  # Backend integration
+  dio: ^5.7.0
+  flutter_secure_storage: ^9.2.2
+  device_info_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:
