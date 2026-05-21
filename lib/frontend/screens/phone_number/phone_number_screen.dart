@@ -96,10 +96,22 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
     final phone = '${_country.code}${_phoneCtrl.text.trim()}';
     UserStore.instance.setPhone(_phoneCtrl.text, _country.code);
 
+    // Timeout safety — if Firebase doesn't respond in 30s, unblock the button
+    bool responded = false;
+
+    Future.delayed(const Duration(seconds: 30), () {
+      if (!responded && mounted) {
+        setState(() {
+          _continuing = false;
+          _errorMessage = 'Timed out. Check your connection and try again.';
+        });
+      }
+    });
+
     await AuthApi.instance.sendOtp(
       phone: phone,
       onCodeSent: (verificationId) {
-        // Store verificationId so OTP screen can use it
+        responded = true;
         UserStore.instance.setVerificationId(verificationId);
         if (mounted) {
           context.push(AppRoutes.otpVerify);
@@ -107,10 +119,11 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
         }
       },
       onError: (error) {
+        responded = true;
         if (mounted) setState(() { _continuing = false; _errorMessage = error; });
       },
       onAutoVerified: (credential) async {
-        // Android auto-read — skip OTP screen entirely
+        responded = true;
         final result = await AuthApi.instance.verifyWithCredential(credential);
         if (result != null && mounted) {
           await UserStore.instance.loginWith(result);
@@ -305,6 +318,30 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
                             child: _PrivacyNote(),
                           ),
                           const SizedBox(height: 32),
+                          if (_errorMessage != null) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: const Color(0x15FF453A),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: const Color(0x40FF453A)),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.error_outline, size: 14, color: Color(0xFFFF8A82)),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _errorMessage!,
+                                      style: AppTypography.label(size: 12.5, color: const Color(0xFFFF8A82)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
                           _StaggerFade(
                             controller: _entranceCtrl,
                             delay: 0.54,
