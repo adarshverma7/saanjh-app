@@ -37,16 +37,25 @@ import '../screens/splash/splash_screen.dart';
 import '../screens/record/record_screen.dart';
 import '../screens/streak_milestone/streak_milestone_screen.dart';
 import '../screens/welcome_home/welcome_home_screen.dart';
+import '../screens/me/me_screen.dart';
 import '../state/user_store.dart';
 import 'app_routes.dart';
 
-// Routes that don't require auth
+// All routes accessible WITHOUT being logged in.
+// Includes the full pre-login onboarding flow.
 const _publicRoutes = {
   AppRoutes.splash,
   AppRoutes.onboardingFilm,
   AppRoutes.onboardingIntro,
+  AppRoutes.preCommit,           // onboarding step
+  AppRoutes.relationshipSelect,  // onboarding step
   AppRoutes.phoneNumber,
   AppRoutes.otpVerify,
+  AppRoutes.nameEntry,           // post-OTP onboarding (user just logged in)
+  AppRoutes.inviteRecipient,     // deep-link accessible before login
+  AppRoutes.inviteAccept,        // deep-link accessible before login
+  AppRoutes.welcomeHome,         // first-time welcome
+  AppRoutes.connectFirst,        // shown when no connection yet
 };
 
 class AppRouter {
@@ -55,29 +64,7 @@ class AppRouter {
   static final GoRouter router = GoRouter(
     initialLocation: AppRoutes.splash,
     debugLogDiagnostics: false,
-    redirect: (context, state) async {
-      final path = state.fullPath ?? AppRoutes.splash;
-
-      // On first launch only, show the onboarding film
-      if (path == AppRoutes.splash) {
-        final prefs = await SharedPreferences.getInstance();
-        final hasSeen = prefs.getBool('has_seen_film') ?? false;
-        if (!hasSeen) return AppRoutes.onboardingFilm;
-      }
-
-      final isLoggedIn = UserStore.instance.isLoggedIn;
-      final isPublic   = _publicRoutes.contains(path);
-
-      // Not logged in trying to reach a private route → send to onboarding
-      if (!isLoggedIn && !isPublic) return AppRoutes.onboardingIntro;
-
-      // Logged in but landing on a public auth screen → send home
-      if (isLoggedIn && (path == AppRoutes.phoneNumber || path == AppRoutes.otpVerify)) {
-        return AppRoutes.home;
-      }
-
-      return null;
-    },
+    redirect: _redirect,
     routes: [
       GoRoute(
         path: AppRoutes.onboardingFilm,
@@ -122,22 +109,15 @@ class AppRouter {
       ),
       GoRoute(
         path: AppRoutes.nameEntry,
-        name: 'nameEntry',
+        name: 'name',
         pageBuilder: (_, s) =>
             const MaterialPage(child: NameEntryScreen()),
       ),
       GoRoute(
         path: AppRoutes.inviteRecipient,
         name: 'inviteRecipient',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, String>?;
-          return MaterialPage(
-            child: InviteRecipientScreen(
-              prefillName: extra?['name'],
-              prefillPhone: extra?['phone'],
-            ),
-          );
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: InviteRecipientScreen()),
       ),
       GoRoute(
         path: AppRoutes.welcomeHome,
@@ -146,29 +126,26 @@ class AppRouter {
             const MaterialPage(child: WelcomeHomeScreen()),
       ),
       GoRoute(
+        path: AppRoutes.home,
+        name: 'home',
+        pageBuilder: (_, s) => const NoTransitionPage(child: HomeScreen()),
+      ),
+      GoRoute(
         path: AppRoutes.connectFirst,
         name: 'connectFirst',
         pageBuilder: (_, s) =>
             const MaterialPage(child: ConnectFirstScreen()),
       ),
       GoRoute(
-        path: AppRoutes.inviteAccept,
-        name: 'inviteAccept',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          return MaterialPage(
-            child: InviteAcceptScreen(
-              inviterName:
-                  extra?['inviterName'] as String? ?? 'Someone special',
-              inviterId: extra?['inviterId'] as String? ?? '',
-            ),
-          );
-        },
+        path: AppRoutes.invite,
+        name: 'invite',
+        pageBuilder: (_, s) => const MaterialPage(child: InviteScreen()),
       ),
       GoRoute(
-        path: AppRoutes.home,
-        name: 'home',
-        pageBuilder: (_, s) => const NoTransitionPage(child: HomeScreen()),
+        path: AppRoutes.inviteAccept,
+        name: 'inviteAccept',
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: InviteAcceptScreen()),
       ),
       GoRoute(
         path: AppRoutes.createGroup,
@@ -179,60 +156,24 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.memoryTree,
         name: 'memoryTree',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final diaryId = extra?['diaryId'] as String?;
-          return MaterialPage(child: MemoryTreeScreen(diaryId: diaryId));
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: MemoryTreeScreen()),
       ),
       GoRoute(
         path: AppRoutes.diaryThread,
         name: 'diaryThread',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final diaryId = extra?['diaryId'] as String? ?? '';
-          return MaterialPage(child: DiaryThreadScreen(diaryId: diaryId));
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: DiaryThreadScreen()),
       ),
       GoRoute(
         path: AppRoutes.settings,
         name: 'settings',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: SettingsScreen()),
+        pageBuilder: (_, s) => const MaterialPage(child: SettingsScreen()),
       ),
       GoRoute(
         path: AppRoutes.voiceRecord,
         name: 'record',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final isVideo = extra?['isVideo'] as bool? ?? false;
-          final autoStart = extra?['autoStart'] as bool? ?? false;
-          final broadcastTo =
-              (extra?['broadcastTo'] as List?)?.cast<String>();
-          final broadcastNames =
-              (extra?['broadcastNames'] as List?)?.cast<String>();
-          final prompt = extra?['prompt'] as String?;
-          final isPrivateReflection =
-              extra?['isPrivateReflection'] as bool? ?? false;
-          final occasionTag = extra?['occasionTag'] as String?;
-          final targetDiaryId = extra?['targetDiaryId'] as String?;
-          final parentEntryId = extra?['parentEntryId'] as String?;
-          final reactionContext = extra?['reactionContext'] as String?;
-          return MaterialPage(
-            child: RecordScreen(
-              isVideo: isVideo,
-              autoStart: autoStart,
-              broadcastTo: broadcastTo,
-              broadcastNames: broadcastNames,
-              prompt: prompt,
-              isPrivateReflection: isPrivateReflection,
-              occasionTag: occasionTag,
-              targetDiaryId: targetDiaryId,
-              parentEntryId: parentEntryId,
-              reactionContext: reactionContext,
-            ),
-          );
-        },
+        pageBuilder: (_, s) => const MaterialPage(child: RecordScreen()),
       ),
       GoRoute(
         path: AppRoutes.family,
@@ -246,20 +187,6 @@ class AppRouter {
             const MaterialPage(child: MemoryDetailScreen()),
       ),
       GoRoute(
-        path: AppRoutes.invite,
-        name: 'inviteSender',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          return MaterialPage(
-            child: InviteScreen(
-              prefillName: extra?['name'] as String?,
-              prefillPhone: extra?['phone'] as String?,
-              isParentInvite: extra?['isParentInvite'] as bool? ?? false,
-            ),
-          );
-        },
-      ),
-      GoRoute(
         path: AppRoutes.occasionPlan,
         name: 'occasion',
         pageBuilder: (_, s) =>
@@ -268,17 +195,13 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.profile,
         name: 'profile',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: ProfileScreen()),
+        pageBuilder: (_, s) => const MaterialPage(child: ProfileScreen()),
       ),
       GoRoute(
         path: AppRoutes.groupThread,
         name: 'groupThread',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final diaryId = extra?['diaryId'] as String?;
-          return MaterialPage(child: GroupThreadScreen(diaryId: diaryId));
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: GroupThreadScreen()),
       ),
       GoRoute(
         path: AppRoutes.firstSend,
@@ -289,65 +212,36 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.discover,
         name: 'discover',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: DiscoverScreen()),
+        pageBuilder: (_, s) => const MaterialPage(child: DiscoverScreen()),
       ),
       GoRoute(
         path: AppRoutes.memoryBook,
         name: 'memoryBook',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final diaryId = extra?['diaryId'] as String?;
-          final isGift = extra?['isGift'] as bool? ?? false;
-          return MaterialPage(
-              child: MemoryBookScreen(diaryId: diaryId, isGift: isGift));
-        },
-      ),
-      GoRoute(
-        path: AppRoutes.flicker,
-        name: 'flicker',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final targetId = extra?['targetDiaryId'] as String?;
-          return MaterialPage(child: FlickerScreen(targetDiaryId: targetId));
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: MemoryBookScreen()),
       ),
       GoRoute(
         path: AppRoutes.wish,
         name: 'wish',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          final name = extra?['name'] as String? ?? 'them';
-          return MaterialPage(child: WishScreen(recipientName: name));
-        },
+        pageBuilder: (_, s) => const MaterialPage(child: WishScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.flicker,
+        name: 'flicker',
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: FlickerScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.streakMilestone,
+        name: 'streak',
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: StreakMilestoneScreen()),
       ),
       GoRoute(
         path: AppRoutes.anniversary,
         name: 'anniversary',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          return MaterialPage(
-            child: AnniversaryScreen(
-              diaryId:     extra?['diaryId']     as String? ?? '',
-              contactName: extra?['contactName'] as String? ?? '',
-              years:       extra?['years']       as int?    ?? 1,
-            ),
-          );
-        },
-      ),
-      GoRoute(
-        path: AppRoutes.streakMilestone,
-        name: 'streakMilestone',
-        pageBuilder: (_, s) {
-          final extra = s.extra as Map<String, dynamic>?;
-          return MaterialPage(
-            child: StreakMilestoneScreen(
-              diaryId: extra?['diaryId'] as String? ?? '',
-              contactName: extra?['contactName'] as String? ?? '',
-              milestone: extra?['milestone'] as int? ?? 0,
-            ),
-          );
-        },
+        pageBuilder: (_, s) =>
+            const MaterialPage(child: AnniversaryScreen()),
       ),
       GoRoute(
         path: AppRoutes.onThisDay,
@@ -364,15 +258,49 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.people,
         name: 'people',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: PeopleScreen()),
+        pageBuilder: (_, s) => const MaterialPage(child: PeopleScreen()),
       ),
       GoRoute(
         path: AppRoutes.personalJournal,
-        name: 'personalJournal',
+        name: 'journal',
         pageBuilder: (_, s) =>
             const MaterialPage(child: PersonalJournalScreen()),
       ),
+      GoRoute(
+        path: '/me',
+        name: 'me',
+        pageBuilder: (_, s) => const MaterialPage(child: MeScreen()),
+      ),
     ],
   );
+}
+
+// Extracted as a top-level function so GoRouter doesn't recreate it on rebuild.
+// Reads SharedPreferences ONCE on first call and caches the result.
+bool? _hasSeenFilm;
+
+Future<String?> _redirect(BuildContext context, GoRouterState state) async {
+  final path = state.fullPath ?? AppRoutes.splash;
+
+  // First-launch check — only runs once (cached after first read)
+  if (path == AppRoutes.splash) {
+    _hasSeenFilm ??= (await SharedPreferences.getInstance())
+        .getBool('has_seen_film') ?? false;
+    if (!_hasSeenFilm!) return AppRoutes.onboardingFilm;
+  }
+
+  final isLoggedIn = UserStore.instance.isLoggedIn;
+  final isPublic   = _publicRoutes.contains(path);
+
+  // Not logged in trying to reach a private route → send to onboarding start
+  if (!isLoggedIn && !isPublic) return AppRoutes.onboardingIntro;
+
+  // Already logged in and fully onboarded → skip auth screens
+  if (isLoggedIn &&
+      UserStore.instance.isOnboarded &&
+      (path == AppRoutes.phoneNumber || path == AppRoutes.otpVerify)) {
+    return AppRoutes.home;
+  }
+
+  return null;
 }
