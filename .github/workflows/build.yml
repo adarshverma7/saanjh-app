@@ -6,13 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: false
-        default: 'apk'
-        type: choice
-        options: [apk, aab]
 
 jobs:
   build:
@@ -43,13 +36,12 @@ jobs:
         run: |
           echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > android/app/google-services.json
 
+      # Always sign with release keystore — Firebase SHA-1 check requires it on all builds
       - name: Decode keystore
-        if: github.ref == 'refs/heads/main'
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/keystore.jks
 
       - name: Create key.properties
-        if: github.ref == 'refs/heads/main'
         run: |
           cat > android/key.properties <<EOF
           storePassword=${{ secrets.KEY_STORE_PASSWORD }}
@@ -58,10 +50,15 @@ jobs:
           storeFile=keystore.jks
           EOF
 
-      # ── Main branch: build signed AAB for Play Store ───────────────────────
+      # Main branch → AAB for Play Store
       - name: Build signed AAB
         if: github.ref == 'refs/heads/main'
         run: flutter build appbundle --release
+
+      # Non-main → release APK for direct install (same keystore = same SHA-1 as Firebase)
+      - name: Build signed APK
+        if: github.ref != 'refs/heads/main'
+        run: flutter build apk --release --split-per-abi
 
       - name: Upload AAB
         if: github.ref == 'refs/heads/main'
@@ -71,12 +68,7 @@ jobs:
           path: build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      # ── Non-main: build release APK (directly installable on phone) ────────
-      - name: Build release APK (installable)
-        if: github.ref != 'refs/heads/main'
-        run: flutter build apk --release --split-per-abi
-
-      - name: Upload release APK (arm64 — most Android phones)
+      - name: Upload APK (arm64 — works on most phones)
         if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
