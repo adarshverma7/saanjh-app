@@ -59,8 +59,16 @@ const _publicRoutes = {
 class AppRouter {
   AppRouter._();
 
+  static String _initialLocation() {
+    final store = UserStore.instance;
+    if (store.isLoggedIn) {
+      return store.isOnboarded ? AppRoutes.home : AppRoutes.nameEntry;
+    }
+    return AppRoutes.splash;
+  }
+
   static final GoRouter router = GoRouter(
-    initialLocation: AppRoutes.splash,
+    initialLocation: _initialLocation(),
     debugLogDiagnostics: false,
     redirect: _redirect,
     routes: [
@@ -305,22 +313,29 @@ bool? _hasSeenFilm;
 Future<String?> _redirect(BuildContext context, GoRouterState state) async {
   final path = state.fullPath ?? AppRoutes.splash;
 
-  // First-launch check — only runs once (cached after first read)
+  final isLoggedIn  = UserStore.instance.isLoggedIn;
+  final isOnboarded = UserStore.instance.isOnboarded;
+
+  // Returning user — skip splash/onboarding entirely and go straight to the app.
+  if (path == AppRoutes.splash && isLoggedIn) {
+    return isOnboarded ? AppRoutes.home : AppRoutes.nameEntry;
+  }
+
+  // New user first-launch check — only runs once (cached after first read).
   if (path == AppRoutes.splash) {
     _hasSeenFilm ??= (await SharedPreferences.getInstance())
         .getBool('has_seen_film') ?? false;
     if (!_hasSeenFilm!) return AppRoutes.onboardingFilm;
   }
 
-  final isLoggedIn = UserStore.instance.isLoggedIn;
-  final isPublic   = _publicRoutes.contains(path);
+  final isPublic = _publicRoutes.contains(path);
 
   // Not logged in trying to reach a private route → send to onboarding start
   if (!isLoggedIn && !isPublic) return AppRoutes.onboardingIntro;
 
   // Already logged in and fully onboarded → skip auth screens
   if (isLoggedIn &&
-      UserStore.instance.isOnboarded &&
+      isOnboarded &&
       (path == AppRoutes.phoneNumber || path == AppRoutes.otpVerify)) {
     return AppRoutes.home;
   }
