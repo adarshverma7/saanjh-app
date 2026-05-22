@@ -12,7 +12,10 @@ class ApiClient {
   static final ApiClient instance = ApiClient._();
 
   final _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    aOptions: AndroidOptions(
+      encryptedSharedPreferences: true,
+      resetOnError: true,
+    ),
   );
 
   late final Dio dio = _buildDio();
@@ -46,8 +49,13 @@ class ApiClient {
   Future<String?> get refreshToken => _storage.read(key: _kRefreshToken);
   Future<String?> get userId       => _storage.read(key: _kUserId);
 
-  Future<bool> get isLoggedIn async =>
-      (await _storage.read(key: _kAccessToken)) != null;
+  Future<bool> get isLoggedIn async {
+    try {
+      return (await _storage.read(key: _kAccessToken)) != null;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<void> clearTokens() async {
     await Future.wait([

@@ -31,7 +31,8 @@ class UserStore extends ChangeNotifier {
   String _status      = '';
   bool   _isParentMode = false;
 
-  static const _kParentMode = 'pref_parent_mode';
+  static const _kParentMode  = 'pref_parent_mode';
+  static const _kIsOnboarded = 'pref_is_onboarded';
 
   String get name        => _name;
   String get phone       => _phone;
@@ -52,12 +53,22 @@ class UserStore extends ChangeNotifier {
 
   /// Call once at app startup to restore session.
   Future<void> init() async {
-    _isLoggedIn = await ApiClient.instance.isLoggedIn;
-    if (_isLoggedIn) {
-      _userId = await ApiClient.instance.userId ?? '';
+    try {
+      _isLoggedIn = await ApiClient.instance.isLoggedIn;
+      if (_isLoggedIn) {
+        _userId = await ApiClient.instance.userId ?? '';
+      }
+    } catch (_) {
+      _isLoggedIn = false;
+      _userId = '';
     }
     await loadPrefs();
     notifyListeners();
+  }
+
+  Future<void> _saveOnboarded(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kIsOnboarded, value);
   }
 
   // ── Auth actions ───────────────────────────────────────────────────────────
@@ -72,6 +83,7 @@ class UserStore extends ChangeNotifier {
     _isLoggedIn  = true;
     _isOnboarded = result.isOnboarded;
     _userId      = result.userId;
+    await _saveOnboarded(result.isOnboarded);
     notifyListeners();
   }
 
@@ -81,6 +93,8 @@ class UserStore extends ChangeNotifier {
     _isOnboarded = false;
     _userId      = '';
     _name        = '';
+    await _saveOnboarded(false);
+    await ApiClient.instance.clearTokens();
     notifyListeners();
   }
 
@@ -88,8 +102,8 @@ class UserStore extends ChangeNotifier {
 
   Future<void> loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
+    _isOnboarded = prefs.getBool(_kIsOnboarded) ?? false;
     final v = prefs.getBool(_kParentMode) ?? false;
-    if (v == _isParentMode) return;
     _isParentMode = v;
     notifyListeners();
   }
@@ -117,8 +131,9 @@ class UserStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setOnboarded(bool value) {
+  Future<void> setOnboarded(bool value) async {
     _isOnboarded = value;
+    await _saveOnboarded(value);
     notifyListeners();
   }
 
