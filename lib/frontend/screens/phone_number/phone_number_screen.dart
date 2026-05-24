@@ -127,6 +127,7 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
         final result = await AuthApi.instance.verifyWithCredential(credential);
         if (result != null && mounted) {
           await UserStore.instance.loginWith(result);
+          if (!mounted) return;
           context.go(result.isOnboarded ? AppRoutes.home : AppRoutes.nameEntry);
         }
       },

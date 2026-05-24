@@ -98,10 +98,10 @@ class _ConnectFirstScreenState extends State<ConnectFirstScreen>
                   Expanded(
                     child: Column(
                       children: [
-                        _fade(
-                          0.22,
-                          Expanded(
-                            child: _ConnectCard(
+                        Expanded(
+                          child: _fade(
+                            0.22,
+                            _ConnectCard(
                               icon: Icons.person_search_rounded,
                               title: 'Find on Saanjh',
                               subtitle:
@@ -114,10 +114,10 @@ class _ConnectFirstScreenState extends State<ConnectFirstScreen>
                           ),
                         ),
                         const SizedBox(height: 12),
-                        _fade(
-                          0.30,
-                          Expanded(
-                            child: _ConnectCard(
+                        Expanded(
+                          child: _fade(
+                            0.30,
+                            _ConnectCard(
                               icon: Icons.person_add_rounded,
                               title: 'Invite someone',
                               subtitle:

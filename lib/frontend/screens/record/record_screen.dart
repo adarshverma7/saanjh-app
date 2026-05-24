@@ -17,6 +17,7 @@ import '../../services/share_card_service.dart';
 import '../../services/transcription_service.dart';
 import '../../state/diary_store.dart';
 import '../../state/personal_reflection_store.dart';
+import '../../state/send_queue_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/app_shadows.dart';
@@ -299,13 +300,15 @@ class _RecordScreenState extends State<RecordScreen>
     }
 
     final store = DiaryStore.instance;
-    final snippet = _mode == _Mode.voice ? '🎙 Voice note' : '🎬 Video clip';
     final now = TimeOfDay.now();
     final h = now.hourOfPeriod == 0 ? 12 : now.hourOfPeriod;
     final m = now.minute.toString().padLeft(2, '0');
     final time = '$h:$m ${now.period.name.toUpperCase()}';
     final filePath = _mode == _Mode.voice ? _audioPath : _recordedFile?.path;
     final sendTime = DateTime.now();
+    final entryType  = _mode == _Mode.voice ? 'voice' : 'video';
+    final fileExt    = _mode == _Mode.voice ? 'm4a' : 'mp4';
+    final contentType = _mode == _Mode.voice ? 'audio/m4a' : 'video/mp4';
 
     // Determine all target diary IDs (broadcast list OR single target).
     final targets = (widget.broadcastTo?.isNotEmpty == true)
@@ -313,91 +316,137 @@ class _RecordScreenState extends State<RecordScreen>
         : (widget.targetDiaryId != null ? [widget.targetDiaryId!] : <String>[]);
 
     if (filePath != null && targets.isNotEmpty) {
-      // ── Upload to backend ──────────────────────────────────────────────────
+      // ── Upload to backend (optimistic: show pending immediately) ───────────
       setState(() => _isSending = true);
+
+      // Unique prefix for all pending entries created in this send batch.
+      final batchId = sendTime.millisecondsSinceEpoch.toString();
+
+      // Add pending entries immediately so the user sees "Sending..." at once.
+      for (final id in targets) {
+        final localId = '${batchId}_$id';
+        final pending = DiaryEntry(
+          id:              localId,
+          diaryId:         id,
+          isMine:          true,
+          type:            entryType,
+          path:            filePath,
+          prompt:          widget.prompt,
+          occasionTag:     widget.occasionTag,
+          createdAt:       sendTime,
+          durationSeconds: _elapsed,
+          parentEntryId:   widget.parentEntryId,
+          isPending:       true,
+        );
+        if (widget.parentEntryId != null) {
+          store.addReaction(widget.parentEntryId!, pending);
+        } else {
+          store.addEntry(pending);
+        }
+        store.updateSnippet(id, '⏳ Sending...', time);
+        if (widget.occasionTag != null) store.setOccasionTag(id, widget.occasionTag);
+      }
+
+      var hasConnectivityFailure = false;
+
       try {
         final bytes = await File(filePath).readAsBytes();
-        final entryType = _mode == _Mode.voice ? 'voice' : 'video';
-        final fileExt = _mode == _Mode.voice ? 'm4a' : 'mp4';
-        final contentType = _mode == _Mode.voice ? 'audio/m4a' : 'video/mp4';
 
         for (final id in targets) {
-          final uploadResult = await EntriesApi.instance.getUploadUrl(
-            connectionId: id,
-            entryType: entryType,
-            fileExtension: fileExt,
-            durationSeconds: _elapsed,
-            fileSizeBytes: bytes.length,
-          );
+          final localId = '${batchId}_$id';
+          try {
+            final uploadResult = await EntriesApi.instance.getUploadUrl(
+              connectionId:    id,
+              entryType:       entryType,
+              fileExtension:   fileExt,
+              durationSeconds: _elapsed,
+              fileSizeBytes:   bytes.length,
+            );
 
-          await EntriesApi.instance.uploadToStorage(
-            uploadUrl: uploadResult.uploadUrl,
-            bytes: bytes,
-            contentType: contentType,
-          );
+            await EntriesApi.instance.uploadToStorage(
+              uploadUrl:   uploadResult.uploadUrl,
+              bytes:       bytes,
+              contentType: contentType,
+            );
 
-          await EntriesApi.instance.createEntry(
-            connectionId: id,
-            entryType: entryType,
-            mediaKey: uploadResult.mediaKey,
-            durationSeconds: _elapsed,
-            recordedAt: sendTime,
-          );
+            await EntriesApi.instance.createEntry(
+              connectionId:    id,
+              entryType:       entryType,
+              mediaKey:        uploadResult.mediaKey,
+              durationSeconds: _elapsed,
+              recordedAt:      sendTime,
+            );
 
-          store.updateSnippet(id, snippet, time);
-          if (widget.occasionTag != null) {
-            store.setOccasionTag(id, widget.occasionTag);
+            // Replace pending entry with real backend data.
+            store.markUploadComplete(localId, uploadResult.entryId);
+
+            TranscriptionService.instance.transcribeFile(filePath).then((t) {
+              if (t != null) store.updateEntryTranscript(uploadResult.entryId, t);
+            });
+          } catch (e) {
+            if (_isConnectivityError(e)) {
+              hasConnectivityFailure = true;
+              // Queue for retry — file will be copied to persistent storage.
+              await SendQueueStore.instance.enqueue(
+                pendingLocalId:  localId,
+                diaryId:         id,
+                sourcePath:      filePath,
+                entryType:       entryType,
+                fileExt:         fileExt,
+                contentType:     contentType,
+                durationSeconds: _elapsed,
+                recordedAt:      sendTime,
+                prompt:          widget.prompt,
+                occasionTag:     widget.occasionTag,
+                parentEntryId:   widget.parentEntryId,
+              );
+            } else {
+              store.markUploadFailed(localId);
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(_uploadErrorMessage(e))),
+              );
+            }
           }
-
-          final entry = DiaryEntry(
-            id: uploadResult.entryId,
-            diaryId: id,
-            isMine: true,
-            type: entryType,
-            path: filePath,
-            transcript: null,
-            prompt: widget.prompt,
-            occasionTag: widget.occasionTag,
-            createdAt: sendTime,
-            durationSeconds: _elapsed,
-            parentEntryId: widget.parentEntryId,
-          );
-          if (widget.parentEntryId != null) {
-            store.addReaction(widget.parentEntryId!, entry);
-          } else {
-            store.addEntry(entry);
-          }
-          TranscriptionService.instance.transcribeFile(filePath).then((t) {
-            if (t != null) store.updateEntryTranscript(entry.id, t);
-          });
         }
       } catch (e) {
+        // File read failed or other pre-upload error.
         if (!mounted) return;
+        for (final id in targets) {
+          store.markUploadFailed('${batchId}_$id');
+        }
         setState(() => _isSending = false);
-        final msg = _uploadErrorMessage(e);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
+          SnackBar(content: Text(_uploadErrorMessage(e))),
         );
         return;
       }
+
       if (mounted) setState(() => _isSending = false);
+
+      if (hasConnectivityFailure && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No internet — will send when you\'re back online.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     } else {
-      // Local-only fallback (no file recorded yet or no targets).
+      // Local-only fallback (no file recorded or no targets).
+      final snippet = _mode == _Mode.voice ? '🎙 Voice note' : '🎬 Video clip';
       for (final id in targets) {
         store.updateSnippet(id, snippet, time);
-        if (widget.occasionTag != null) {
-          store.setOccasionTag(id, widget.occasionTag);
-        }
+        if (widget.occasionTag != null) store.setOccasionTag(id, widget.occasionTag);
         final entry = DiaryEntry(
-          id: '${sendTime.millisecondsSinceEpoch}_$id',
-          diaryId: id,
-          isMine: true,
-          type: _mode == _Mode.voice ? 'voice' : 'video',
-          path: filePath ?? '',
-          transcript: null,
-          prompt: widget.prompt,
-          occasionTag: widget.occasionTag,
-          createdAt: sendTime,
+          id:            '${sendTime.millisecondsSinceEpoch}_$id',
+          diaryId:       id,
+          isMine:        true,
+          type:          entryType,
+          path:          filePath ?? '',
+          prompt:        widget.prompt,
+          occasionTag:   widget.occasionTag,
+          createdAt:     sendTime,
           parentEntryId: widget.parentEntryId,
         );
         if (widget.parentEntryId != null) {
@@ -440,6 +489,15 @@ class _RecordScreenState extends State<RecordScreen>
 
     if (!mounted) return;
     context.pop();
+  }
+
+  bool _isConnectivityError(Object e) {
+    if (e is DioException) {
+      return e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout;
+    }
+    return false;
   }
 
   String _uploadErrorMessage(Object e) {

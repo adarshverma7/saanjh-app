@@ -25,6 +25,8 @@ class DiaryEntry {
   double? moodEnergy; // 0.0–1.0, derived from amplitude analysis
   final List<DiaryEntry> reactions; // voice reactions to this entry
   final String? parentEntryId; // set for reactions; null for top-level entries
+  final bool isPending; // optimistic send — upload not yet confirmed
+  final bool isFailed;  // upload failed but queued for retry
 
   DiaryEntry({
     required this.id,
@@ -42,6 +44,8 @@ class DiaryEntry {
     this.moodEnergy,
     List<DiaryEntry>? reactions,
     this.parentEntryId,
+    this.isPending = false,
+    this.isFailed = false,
   }) : reactions = reactions ?? [];
 }
 
@@ -596,6 +600,13 @@ class DiaryStore extends ChangeNotifier {
   bool isLocked   (String id) => _locked.contains(id);
   bool isArchived (String id) => _archived.contains(id);
   bool has        (String id) => _diaries.any((d) => d.id == id);
+  bool hasPhone   (String phone) =>
+      phone.isNotEmpty && _diaries.any((d) => d.phone == phone);
+
+  DiaryContact? findByPhone(String phone) {
+    try { return _diaries.firstWhere((d) => d.phone == phone); }
+    catch (_) { return null; }
+  }
 
   /// Visible diaries: archived hidden, pinned sorted first.
   List<DiaryContact> get diaries {
@@ -662,6 +673,77 @@ class DiaryStore extends ChangeNotifier {
       if (changed) notifyListeners();
     } catch (_) {
       // Network unavailable — in-memory state remains unchanged.
+    }
+  }
+
+  /// Called when a queued upload finally succeeds. Replaces the pending
+  /// DiaryEntry (identified by [pendingId]) with the real backend entry ID
+  /// and marks it as delivered.
+  void markUploadComplete(String pendingId, String realEntryId) {
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId]!;
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == pendingId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: realEntryId,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: old.path,
+            transcript: old.transcript,
+            prompt: old.prompt,
+            occasionTag: old.occasionTag,
+            createdAt: old.createdAt,
+            durationSeconds: old.durationSeconds,
+            listenedAt: old.listenedAt,
+            moodEnergy: old.moodEnergy,
+            reactions: old.reactions,
+            parentEntryId: old.parentEntryId,
+            isPending: false,
+            isFailed: false,
+          );
+          final snippet = old.type == 'voice' ? '🎙 Voice note' : '🎬 Video clip';
+          final now = DateTime.now();
+          final h = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
+          final m = now.minute.toString().padLeft(2, '0');
+          final period = now.hour >= 12 ? 'PM' : 'AM';
+          updateSnippet(old.diaryId, snippet, '$h:$m $period');
+          return;
+        }
+      }
+    }
+  }
+
+  /// Called when an upload fails for a non-connectivity reason. Marks the
+  /// entry so the UI can show a failed state.
+  void markUploadFailed(String pendingId) {
+    for (final list in _entries.values) {
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == pendingId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: old.id,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: old.path,
+            transcript: old.transcript,
+            prompt: old.prompt,
+            occasionTag: old.occasionTag,
+            createdAt: old.createdAt,
+            durationSeconds: old.durationSeconds,
+            listenedAt: old.listenedAt,
+            moodEnergy: old.moodEnergy,
+            reactions: old.reactions,
+            parentEntryId: old.parentEntryId,
+            isPending: false,
+            isFailed: true,
+          );
+          notifyListeners();
+          return;
+        }
+      }
     }
   }
 

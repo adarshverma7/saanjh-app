@@ -8,12 +8,13 @@ import '../theme/app_colors.dart';
 class SaanjhContact {
   final String id;
   final String name;
-  final String phone;          // E.164 normalised (+91XXXXXXXXXX)
-  final String displayPhone;   // formatted for display
+  final String phone;            // E.164 normalised (+91XXXXXXXXXX)
+  final String displayPhone;    // formatted for display
   final String initial;
   final Color avatarColor;
   final bool isOnSaanjh;
-  final String? saanjhName;    // their Saanjh display name, if on the app
+  final String? saanjhName;     // their Saanjh display name, if on the app
+  final String? connectionId;   // backend connection UUID if already connected
 
   const SaanjhContact({
     required this.id,
@@ -24,6 +25,7 @@ class SaanjhContact {
     required this.avatarColor,
     required this.isOnSaanjh,
     this.saanjhName,
+    this.connectionId,
   });
 }
 
@@ -83,7 +85,8 @@ class ContactsService {
 
     _cache = unique.map((e) {
       final colorIdx = e.name.codeUnits.fold(0, (a, b) => a + b) % _palette.length;
-      final onSaanjh = onSaanjhMap.containsKey(e.e164);
+      final info = onSaanjhMap[e.e164];
+      final onSaanjh = info != null;
       return SaanjhContact(
         id:           e.id,
         name:         e.name,
@@ -92,7 +95,8 @@ class ContactsService {
         initial:      e.name.characters.first.toUpperCase(),
         avatarColor:  _palette[colorIdx],
         isOnSaanjh:   onSaanjh,
-        saanjhName:   onSaanjh ? onSaanjhMap[e.e164] : null,
+        saanjhName:   info?['name'] as String?,
+        connectionId: info?['connection_id'] as String?,
       );
     }).toList();
 
@@ -117,11 +121,12 @@ class ContactsService {
   // ── Private helpers ────────────────────────────────────────────────────────
 
   /// Calls POST /connections/check-contacts with batches of 500.
-  /// Returns a map of e164 → saanjh display name (null if not set).
-  Future<Map<String, String?>> _fetchSaanjhMembers(List<String> phones) async {
+  /// Returns a map of e164 → {name, connection_id?}.
+  Future<Map<String, Map<String, dynamic>>> _fetchSaanjhMembers(
+      List<String> phones) async {
     if (phones.isEmpty) return {};
 
-    final result = <String, String?>{};
+    final result = <String, Map<String, dynamic>>{};
 
     // Process in batches of 500
     for (var i = 0; i < phones.length; i += 500) {
@@ -134,7 +139,10 @@ class ContactsService {
         final list = (res.data as List<dynamic>?) ?? [];
         for (final item in list) {
           final map = item as Map<String, dynamic>;
-          result[map['phone'] as String] = map['name'] as String?;
+          result[map['phone'] as String] = {
+            'name': map['name'] as String?,
+            'connection_id': map['connection_id'] as String?,
+          };
         }
       } catch (_) {
         // Network failure — degrade gracefully (all contacts shown as "not on Saanjh")

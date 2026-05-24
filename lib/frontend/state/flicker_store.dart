@@ -1,7 +1,9 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../../backend/flicker_api.dart';
 import 'diary_store.dart';
+import 'send_queue_store.dart';
 
 class FlickerRecord {
   final String diaryId;
@@ -103,8 +105,19 @@ class FlickerStore extends ChangeNotifier {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
+  // Returns true when the error is a connectivity issue (worth retrying later).
+  bool _isConnectivityError(Object e) {
+    if (e is DioException) {
+      return e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout;
+    }
+    return false;
+  }
+
   void sendFlicker(String diaryId, String personName) {
     if (!windowOpen) return;
+    // Optimistic: show immediately so the UI is responsive.
     _records.add(FlickerRecord(
       diaryId: diaryId,
       personName: personName,
@@ -122,7 +135,13 @@ class FlickerStore extends ChangeNotifier {
         ));
         notifyListeners();
       }
-    }).catchError((_) {});
+    }).catchError((e) {
+      if (_isConnectivityError(e)) {
+        // Queue for retry when connectivity returns (today only).
+        SendQueueStore.instance.enqueueFlicker(diaryId);
+      }
+      // Non-connectivity errors: optimistic record stays (user sees it was sent).
+    });
   }
 
   void sendFlickerToMany(List<String> diaryIds, List<String> names) {
@@ -135,8 +154,7 @@ class FlickerStore extends ChangeNotifier {
         sentAt: now,
         isMine: true,
       ));
-      // Fire-and-forget — optimistic update already applied above.
-      final id = diaryIds[i];
+      final id   = diaryIds[i];
       final name = names[i];
       FlickerApi.instance.sendFlicker(id).then((res) {
         if (res['is_mutual'] == true && !hasThemFlickeredToday(id)) {
@@ -148,7 +166,11 @@ class FlickerStore extends ChangeNotifier {
           ));
           notifyListeners();
         }
-      }).catchError((_) {});
+      }).catchError((e) {
+        if (_isConnectivityError(e)) {
+          SendQueueStore.instance.enqueueFlicker(id);
+        }
+      });
     }
     notifyListeners();
   }
