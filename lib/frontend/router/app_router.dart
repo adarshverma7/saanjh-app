@@ -188,7 +188,21 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.voiceRecord,
         name: 'record',
-        pageBuilder: (_, s) => const MaterialPage(child: RecordScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: RecordScreen(
+            isVideo: extra['isVideo'] as bool? ?? false,
+            autoStart: extra['autoStart'] as bool? ?? false,
+            broadcastTo: (extra['broadcastTo'] as List?)?.cast<String>(),
+            broadcastNames: (extra['broadcastNames'] as List?)?.cast<String>(),
+            prompt: extra['prompt'] as String?,
+            isPrivateReflection: extra['isPrivateReflection'] as bool? ?? false,
+            occasionTag: extra['occasionTag'] as String?,
+            targetDiaryId: extra['targetDiaryId'] as String?,
+            parentEntryId: extra['parentEntryId'] as String?,
+            reactionContext: extra['reactionContext'] as String?,
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.family,
