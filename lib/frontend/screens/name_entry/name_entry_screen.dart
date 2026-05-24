@@ -56,15 +56,10 @@ class _NameEntryScreenState extends State<NameEntryScreen>
     if (!_isValid || _continuing) return;
     HapticFeedback.lightImpact();
     setState(() => _continuing = true);
-    UserStore.instance.setName(_nameCtrl.text.trim());
+    await UserStore.instance.setName(_nameCtrl.text.trim());
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     context.go(AppRoutes.connectFirst);
-  }
-
-  void _skip() {
-    HapticFeedback.selectionClick();
-    context.go(AppRoutes.welcomeHome);
   }
 
   Widget _fade({required double delay, required Widget child}) {
@@ -203,21 +198,6 @@ class _NameEntryScreenState extends State<NameEntryScreen>
                             label: 'Continue  →',
                             loading: _continuing,
                             onPressed: _isValid ? _continue : null,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        _fade(
-                          delay: 0.58,
-                          child: Center(
-                            child: TextButton(
-                              onPressed: _skip,
-                              child: Text(
-                                'Skip for now',
-                                style: AppTypography.label(
-                                    size: 13,
-                                    color: AppColors.textFaint),
-                              ),
-                            ),
                           ),
                         ),
                       ],

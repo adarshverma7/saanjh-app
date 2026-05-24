@@ -56,6 +56,7 @@ class _WelcomeHomeScreenState extends State<WelcomeHomeScreen>
     if (_going) return;
     HapticFeedback.mediumImpact();
     setState(() => _going = true);
+    await UserStore.instance.setOnboarded(true);
     await Future.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
     context.go(AppRoutes.home);

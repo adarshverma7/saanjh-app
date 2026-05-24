@@ -34,6 +34,7 @@ class UserStore extends ChangeNotifier {
   static const _kIsLoggedIn  = 'pref_is_logged_in';
   static const _kParentMode  = 'pref_parent_mode';
   static const _kIsOnboarded = 'pref_is_onboarded';
+  static const _kName        = 'pref_name';
 
   String get name        => _name;
   String get phone       => _phone;
@@ -103,6 +104,8 @@ class UserStore extends ChangeNotifier {
     _name        = '';
     await _saveLoggedIn(false);
     await _saveOnboarded(false);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kName);
     await ApiClient.instance.clearTokens();
     notifyListeners();
   }
@@ -111,9 +114,9 @@ class UserStore extends ChangeNotifier {
 
   Future<void> loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    _isOnboarded = prefs.getBool(_kIsOnboarded) ?? false;
-    final v = prefs.getBool(_kParentMode) ?? false;
-    _isParentMode = v;
+    _isOnboarded  = prefs.getBool(_kIsOnboarded)   ?? false;
+    _isParentMode = prefs.getBool(_kParentMode)     ?? false;
+    _name         = prefs.getString(_kName)         ?? '';
     notifyListeners();
   }
 
@@ -129,8 +132,10 @@ class UserStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setName(String name) {
+  Future<void> setName(String name) async {
     _name = name.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kName, _name);
     notifyListeners();
   }
 
