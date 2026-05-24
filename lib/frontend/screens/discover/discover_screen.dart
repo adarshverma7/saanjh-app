@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../backend/connections_api.dart';
 import '../../router/app_routes.dart';
 import '../../services/contacts_service.dart';
 import '../../state/diary_store.dart';
@@ -33,6 +34,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   List<SaanjhContact> _toInvite = [];
   String? _toast;
   String _searchQuery = '';
+  // Phone numbers currently being connected to the backend.
+  final Set<String> _connecting = {};
 
   @override
   void initState() {
@@ -79,19 +82,53 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     });
   }
 
-  void _startDiary(SaanjhContact contact) {
-    if (_store.has(contact.id)) return;
+  Future<void> _startDiary(SaanjhContact contact) async {
+    // Already in diary (matched by phone because backend IDs ≠ device contact IDs).
+    if (_store.hasPhone(contact.phone)) {
+      _showToast("${contact.name} is already in your diary");
+      return;
+    }
+    if (_connecting.contains(contact.phone)) return;
+
     HapticFeedback.mediumImpact();
-    _store.add(DiaryContact(
-      id: contact.id,
-      name: contact.name,
-      relation: 'Contact',
-      phone: contact.phone,
-      initial: contact.initial,
-      avatarColor: contact.avatarColor,
-    ));
-    _showToast("${contact.name}'s diary is ready");
-    setState(() {});
+    setState(() => _connecting.add(contact.phone));
+
+    try {
+      // If check-contacts already returned a connection_id, use it directly.
+      String? connectionId = contact.connectionId;
+
+      if (connectionId == null || connectionId.isEmpty) {
+        // Create a new connection with this person via the invite flow.
+        final res = await ConnectionsApi.instance.createInvite(
+          relationshipType: 'friend',
+          connectionName: contact.name,
+          invitedPhone: contact.phone,
+        );
+        // Backend returns the connection entity; try common field names.
+        connectionId = (res['connection_id'] ?? res['id']) as String?;
+      }
+
+      if (connectionId == null || connectionId.isEmpty) {
+        throw Exception('No connection ID returned');
+      }
+
+      if (!_store.has(connectionId)) {
+        _store.add(DiaryContact(
+          id: connectionId,
+          name: contact.name,
+          relation: 'Contact',
+          phone: contact.phone,
+          initial: contact.initial,
+          avatarColor: contact.avatarColor,
+        ));
+      }
+
+      if (mounted) _showToast("${contact.name}'s diary is ready");
+    } catch (_) {
+      if (mounted) _showToast("Couldn't connect. Please try again.");
+    } finally {
+      if (mounted) setState(() => _connecting.remove(contact.phone));
+    }
   }
 
   void _invite(SaanjhContact contact) {
@@ -148,6 +185,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           onContinue: _skipToHome,
           searchQuery: _searchQuery,
           onSearchChanged: (q) => setState(() => _searchQuery = q),
+          connecting: _connecting,
         );
     }
   }
@@ -454,11 +492,12 @@ class _ContactsView extends StatelessWidget {
   final List<SaanjhContact> onSaanjh;
   final List<SaanjhContact> toInvite;
   final DiaryStore store;
-  final ValueChanged<SaanjhContact> onStartDiary;
+  final Future<void> Function(SaanjhContact) onStartDiary;
   final ValueChanged<SaanjhContact> onInvite;
   final VoidCallback onContinue;
   final String searchQuery;
   final ValueChanged<String> onSearchChanged;
+  final Set<String> connecting;
 
   const _ContactsView({
     required this.onSaanjh,
@@ -469,6 +508,7 @@ class _ContactsView extends StatelessWidget {
     required this.onContinue,
     required this.searchQuery,
     required this.onSearchChanged,
+    required this.connecting,
   });
 
   List<SaanjhContact> _filter(List<SaanjhContact> list) {
@@ -491,7 +531,11 @@ class _ContactsView extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (_, w) {
-        final available = onSaanjh.where((c) => !store.has(c.id)).toList();
+        // Check by phone — backend connection IDs don't match device contact IDs.
+        // Contacts that are "connecting" stay visible with a loading spinner.
+        final available = onSaanjh
+            .where((c) => !store.hasPhone(c.phone))
+            .toList();
         final filteredSaanjh = _filter(available);
         final filteredInvite = _filter(toInvite);
         final allAdded = available.isEmpty && onSaanjh.isNotEmpty;
@@ -533,6 +577,7 @@ class _ContactsView extends StatelessWidget {
                             contact: c,
                             inDiary: false,
                             onSaanjh: true,
+                            isConnecting: connecting.contains(c.phone),
                             onTap: () => onStartDiary(c),
                           ),
                     ],
@@ -783,6 +828,7 @@ class _PersonTile extends StatefulWidget {
   final SaanjhContact contact;
   final bool inDiary;
   final bool onSaanjh;
+  final bool isConnecting;
   final VoidCallback onTap;
 
   const _PersonTile({
@@ -790,6 +836,7 @@ class _PersonTile extends StatefulWidget {
     required this.inDiary,
     required this.onSaanjh,
     required this.onTap,
+    this.isConnecting = false,
   });
 
   @override
@@ -805,10 +852,10 @@ class _PersonTileState extends State<_PersonTile> {
     final onSaanjh = widget.onSaanjh;
 
     return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
-      onTap: widget.onTap,
+      onTapDown: widget.isConnecting ? null : (_) => setState(() => _pressed = true),
+      onTapUp:   widget.isConnecting ? null : (_) => setState(() => _pressed = false),
+      onTapCancel: widget.isConnecting ? null : () => setState(() => _pressed = false),
+      onTap: widget.isConnecting ? null : widget.onTap,
       child: AnimatedContainer(
         duration: AppMotion.fast,
         margin: const EdgeInsets.only(bottom: 8),
@@ -933,10 +980,17 @@ class _PersonTileState extends State<_PersonTile> {
               ),
             ),
             const SizedBox(width: 10),
-            _ActionPill(
-              label: onSaanjh ? 'Start diary' : 'Invite',
-              isInvite: !onSaanjh,
-            ),
+            widget.isConnecting
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.emberWarm),
+                  )
+                : _ActionPill(
+                    label: onSaanjh ? 'Start diary' : 'Invite',
+                    isInvite: !onSaanjh,
+                  ),
           ],
         ),
       ),

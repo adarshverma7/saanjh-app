@@ -73,9 +73,9 @@ class EntriesApi {
       data: {
         'entry_type':  entryType,
         'media_key':   mediaKey,
-        if (durationSeconds != null) 'duration_seconds': durationSeconds,
-        if (mood != null) 'mood': mood,
-        if (recordedAt != null) 'recorded_at': recordedAt.toIso8601String(),
+        'duration_seconds': ?durationSeconds,
+        'mood': ?mood,
+        'recorded_at': ?recordedAt?.toIso8601String(),
       },
     );
     return res.data as Map<String, dynamic>;
@@ -92,8 +92,8 @@ class EntriesApi {
     final res = await _dio.get(
       '/connections/$connectionId/entries',
       queryParameters: {
-        if (cursor != null) 'cursor': cursor,
-        if (filter != null) 'filter': filter,
+        'cursor': ?cursor,
+        'filter': ?filter,
         'limit': limit,
       },
     );

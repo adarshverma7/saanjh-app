@@ -2,9 +2,14 @@
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:io' show Platform;
+
+import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
+import '../../state/send_queue_store.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
@@ -42,7 +47,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int _navIndex = 0;
   double _pagePos = 0.0;
   late final AnimationController _fabCtrl;
@@ -82,8 +87,13 @@ class _HomeScreenState extends State<HomeScreen>
     DiaryStore.instance.addListener(_onStoreChangeForWidget);
     FlickerStore.instance.addListener(_onStoreChangeForWidget);
     UserStore.instance.addListener(_onUserStoreChange);
+    WidgetsBinding.instance.addObserver(this);
     UserStore.instance.loadPrefs();
     DiaryStore.instance.loadConnections();
+    // Load and retry anything that was queued while offline.
+    SendQueueStore.instance.load().then((_) => SendQueueStore.instance.processQueue());
+    // Register push-notification device token; queues automatically if offline.
+    _registerDeviceToken();
     OnThisDayService.instance.load();
     _maybeShowOnThisDayOrMorning();
     // Schedule weekly digest notification (runs on every open, guards internally).
@@ -277,6 +287,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     NotificationService.instance.detach(DiaryStore.instance);
     DiaryStore.instance.removeListener(_onStoreChangeForWidget);
     FlickerStore.instance.removeListener(_onStoreChangeForWidget);
@@ -284,6 +295,55 @@ class _HomeScreenState extends State<HomeScreen>
     _fabCtrl.dispose();
     _pageCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Retry the full queue (uploads, flickers, token reg) on every foreground.
+      SendQueueStore.instance.processQueue();
+    }
+  }
+
+  /// Reads the device ID and queues a token registration with the backend.
+  /// When `firebase_messaging` is added, swap the placeholder token fetch here.
+  Future<void> _registerDeviceToken() async {
+    try {
+      final info = DeviceInfoPlugin();
+      final String deviceId;
+      final String platform;
+      if (Platform.isAndroid) {
+        final a = await info.androidInfo;
+        deviceId = a.id;
+        platform = 'android';
+      } else if (Platform.isIOS) {
+        final i = await info.iosInfo;
+        deviceId = i.identifierForVendor ?? i.name;
+        platform = 'ios';
+      } else {
+        return; // Desktop — no push notifications
+      }
+
+      // TODO: replace with FirebaseMessaging.instance.getToken() once
+      // firebase_messaging is added to pubspec.yaml.
+      const fcmToken = ''; // placeholder until firebase_messaging is wired up
+      if (fcmToken.isEmpty) return;
+
+      try {
+        await NotificationsApi.instance.registerDeviceToken(
+          deviceId: deviceId,
+          fcmToken: fcmToken,
+          platform: platform,
+        );
+      } catch (_) {
+        // Offline — queue for retry when connectivity returns.
+        await SendQueueStore.instance.enqueueTokenReg(
+          deviceId: deviceId,
+          fcmToken: fcmToken,
+          platform: platform,
+        );
+      }
+    } catch (_) {}
   }
 
   void _onNavTap(int i) {

@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
-
 import '../../router/app_routes.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
@@ -31,9 +29,6 @@ class InviteScreen extends StatefulWidget {
 class _InviteScreenState extends State<InviteScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
-  late final TextEditingController _nameCtrl;
-  late final TextEditingController _phoneCtrl;
-  bool _launchingWa = false;
 
   @override
   void initState() {
@@ -42,23 +37,13 @@ class _InviteScreenState extends State<InviteScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..forward();
-    _nameCtrl = TextEditingController(text: widget.prefillName ?? '');
-    _phoneCtrl = TextEditingController(text: widget.prefillPhone ?? '');
-    _nameCtrl.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
-    _nameCtrl.dispose();
-    _phoneCtrl.dispose();
     super.dispose();
   }
-
-  bool get _hasName => _nameCtrl.text.trim().isNotEmpty;
-  bool get _canSend =>
-      _nameCtrl.text.trim().isNotEmpty &&
-      _phoneCtrl.text.replaceAll(RegExp(r'\D'), '').length >= 7;
 
   String get _senderName {
     final n = UserStore.instance.name;
@@ -70,46 +55,9 @@ class _InviteScreenState extends State<InviteScreen>
       'Download it here → https://saanjh.app/invite\n'
       'Your diary together starts the moment you join.';
 
-  String get _whatsAppMessage =>
-      '$_senderName ne tumhe Saanjh pe invite kiya hai. '
-      'Yahan click karo: https://saanjh.app/invite';
-
-  String get _whatsAppPhone {
-    final raw = _phoneCtrl.text.replaceAll(RegExp(r'[^\d+]'), '');
-    // If user typed number without country code, assume +91.
-    if (raw.startsWith('+')) return raw;
-    if (raw.startsWith('91') && raw.length > 10) return '+$raw';
-    return '+91$raw';
-  }
-
   Future<void> _shareViaSystem() async {
     HapticFeedback.mediumImpact();
     await Share.share(_shareMessage);
-  }
-
-  Future<void> _sendViaWhatsApp() async {
-    if (_launchingWa || !_canSend) return;
-    HapticFeedback.mediumImpact();
-    setState(() => _launchingWa = true);
-
-    final encoded = Uri.encodeComponent(_whatsAppMessage);
-    final url = Uri.parse('https://wa.me/$_whatsAppPhone?text=$encoded');
-
-    try {
-      final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('WhatsApp not found. Message copied to clipboard.'),
-        ));
-        await Clipboard.setData(ClipboardData(text: _whatsAppMessage));
-      }
-    } catch (_) {
-      if (mounted) {
-        await Clipboard.setData(ClipboardData(text: _whatsAppMessage));
-      }
-    }
-
-    if (mounted) setState(() => _launchingWa = false);
   }
 
   Future<void> _activateSimpleMode() async {
@@ -239,43 +187,6 @@ class _InviteScreenState extends State<InviteScreen>
           ),
         ],
       ),
-    );
-  }
-}
-
-// ─── Step header ──────────────────────────────────────────────────────────────
-
-class _StepHeader extends StatelessWidget {
-  final String step;
-  final String label;
-  const _StepHeader({required this.step, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 22,
-          height: 22,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.ember.withValues(alpha: 0.18),
-            border: Border.all(
-                color: AppColors.emberWarm.withValues(alpha: 0.35), width: 1),
-          ),
-          child: Center(
-            child: Text(step,
-                style: AppTypography.label(
-                    size: 11,
-                    weight: FontWeight.w700,
-                    color: AppColors.emberWarm)),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(label,
-            style: AppTypography.eyebrow(
-                size: 10, color: AppColors.textFaint)),
-      ],
     );
   }
 }
@@ -599,8 +510,6 @@ class _BulletRow extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-
 class _TopBar extends StatelessWidget {
   final VoidCallback onClose;
   const _TopBar({required this.onClose});
@@ -632,56 +541,3 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-class _FieldLabel extends StatelessWidget {
-  final String text;
-  const _FieldLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: AppTypography.eyebrow(size: 10, color: AppColors.textFaint),
-      );
-}
-
-class _InviteField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final TextInputType keyboardType;
-  final TextCapitalization textCapitalization;
-
-  const _InviteField({
-    required this.controller,
-    required this.hint,
-    this.keyboardType = TextInputType.text,
-    this.textCapitalization = TextCapitalization.none,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      textCapitalization: textCapitalization,
-      style: AppTypography.body(size: 15),
-      cursorColor: AppColors.emberWarm,
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: AppTypography.body(size: 15, color: AppColors.textFaint),
-        filled: true,
-        fillColor: AppColors.surfaceTint,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide:
-              BorderSide(color: AppColors.borderSoft, width: 1.5),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide:
-              const BorderSide(color: AppColors.emberWarm, width: 1.5),
-        ),
-      ),
-    );
-  }
-}

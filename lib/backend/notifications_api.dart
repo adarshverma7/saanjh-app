@@ -15,7 +15,7 @@ class NotificationsApi {
     final res = await _dio.get('/notifications', queryParameters: {
       'filter': filter,
       'limit':  limit,
-      if (cursor != null) 'cursor': cursor,
+      'cursor': ?cursor,
     });
     return res.data as Map<String, dynamic>;
   }
@@ -33,8 +33,8 @@ class NotificationsApi {
     await _dio.post('/notifications/device-token', data: {
       'device_id':   deviceId,
       'fcm_token':   fcmToken,
-      if (appVersion != null) 'app_version': appVersion,
-      if (platform != null) 'platform': platform,
+      'app_version': ?appVersion,
+      'platform': ?platform,
     });
   }
 

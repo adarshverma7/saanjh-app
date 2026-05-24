@@ -15,7 +15,7 @@ class ConnectionsApi {
     final res = await _dio.post('/connections/invite', data: {
       'relationship_type': relationshipType,
       'connection_name': connectionName,
-      if (invitedPhone != null) 'invited_phone': invitedPhone,
+      'invited_phone': ?invitedPhone,
     });
     return res.data as Map<String, dynamic>;
   }
