@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../router/app_routes.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/onboarding_background.dart';
-import '../pre_commit/pre_commit_screen.dart' show kPreCommitRelationKey;
 
 class ConnectFirstScreen extends StatefulWidget {
   const ConnectFirstScreen({super.key});
@@ -124,18 +122,9 @@ class _ConnectFirstScreenState extends State<ConnectFirstScreen>
                               title: 'Invite someone',
                               subtitle:
                                   'Share a link via WhatsApp, iMessage, email — wherever they are',
-                              onTap: () async {
+                              onTap: () {
                                 HapticFeedback.lightImpact();
-                                final prefs =
-                                    await SharedPreferences.getInstance();
-                                final rel = prefs.getString(
-                                        kPreCommitRelationKey) ??
-                                    '';
-                                if (!context.mounted) return;
-                                context.push(AppRoutes.invite, extra: {
-                                  if (rel == 'parent')
-                                    'isParentInvite': true,
-                                });
+                                context.push(AppRoutes.invite);
                               },
                             ),
                           ),

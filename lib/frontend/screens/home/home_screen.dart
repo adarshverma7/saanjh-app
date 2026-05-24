@@ -339,8 +339,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Simplified home for parents.
-    if (UserStore.instance.isParentMode) {
+    // Simplified home for loved ones who prefer a minimal interface.
+    if (UserStore.instance.isSimpleMode) {
       final diaries = _store.diaries;
       final diary = diaries.isNotEmpty ? diaries.first : null;
       return _ParentModeHome(diary: diary);
@@ -578,7 +578,7 @@ class _ParentModeHomeState extends State<_ParentModeHome>
                 TextButton(
                   onPressed: () async {
                     HapticFeedback.selectionClick();
-                    await UserStore.instance.setParentMode(false);
+                    await UserStore.instance.setSimpleMode(false);
                   },
                   child: Text(
                     'Exit simplified view',

@@ -29,10 +29,10 @@ class UserStore extends ChangeNotifier {
   String _phone       = '';
   String _countryCode = '+91';
   String _status      = '';
-  bool   _isParentMode = false;
+  bool   _isSimpleMode = false;
 
   static const _kIsLoggedIn  = 'pref_is_logged_in';
-  static const _kParentMode  = 'pref_parent_mode';
+  static const _kSimpleMode  = 'pref_simple_mode';
   static const _kIsOnboarded = 'pref_is_onboarded';
   static const _kName        = 'pref_name';
 
@@ -49,7 +49,7 @@ class UserStore extends ChangeNotifier {
 
   bool get hasName  => _name.isNotEmpty;
   bool get hasPhone => _phone.isNotEmpty;
-  bool get isParentMode => _isParentMode;
+  bool get isSimpleMode => _isSimpleMode;
 
   // ── Initialisation ─────────────────────────────────────────────────────────
 
@@ -115,15 +115,15 @@ class UserStore extends ChangeNotifier {
   Future<void> loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     _isOnboarded  = prefs.getBool(_kIsOnboarded)   ?? false;
-    _isParentMode = prefs.getBool(_kParentMode)     ?? false;
+    _isSimpleMode = prefs.getBool(_kSimpleMode)     ?? false;
     _name         = prefs.getString(_kName)         ?? '';
     notifyListeners();
   }
 
-  Future<void> setParentMode(bool value) async {
-    _isParentMode = value;
+  Future<void> setSimpleMode(bool value) async {
+    _isSimpleMode = value;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kParentMode, value);
+    await prefs.setBool(_kSimpleMode, value);
     notifyListeners();
   }
 
