@@ -31,6 +31,7 @@ class UserStore extends ChangeNotifier {
   String _status      = '';
   bool   _isParentMode = false;
 
+  static const _kIsLoggedIn  = 'pref_is_logged_in';
   static const _kParentMode  = 'pref_parent_mode';
   static const _kIsOnboarded = 'pref_is_onboarded';
 
@@ -54,7 +55,8 @@ class UserStore extends ChangeNotifier {
   /// Call once at app startup to restore session.
   Future<void> init() async {
     try {
-      _isLoggedIn = await ApiClient.instance.isLoggedIn;
+      final prefs = await SharedPreferences.getInstance();
+      _isLoggedIn = prefs.getBool(_kIsLoggedIn) ?? false;
       if (_isLoggedIn) {
         _userId = await ApiClient.instance.userId ?? '';
       }
@@ -64,6 +66,11 @@ class UserStore extends ChangeNotifier {
     }
     await loadPrefs();
     notifyListeners();
+  }
+
+  Future<void> _saveLoggedIn(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kIsLoggedIn, value);
   }
 
   Future<void> _saveOnboarded(bool value) async {
@@ -83,6 +90,7 @@ class UserStore extends ChangeNotifier {
     _isLoggedIn  = true;
     _isOnboarded = result.isOnboarded;
     _userId      = result.userId;
+    await _saveLoggedIn(true);
     await _saveOnboarded(result.isOnboarded);
     notifyListeners();
   }
@@ -93,6 +101,7 @@ class UserStore extends ChangeNotifier {
     _isOnboarded = false;
     _userId      = '';
     _name        = '';
+    await _saveLoggedIn(false);
     await _saveOnboarded(false);
     await ApiClient.instance.clearTokens();
     notifyListeners();
