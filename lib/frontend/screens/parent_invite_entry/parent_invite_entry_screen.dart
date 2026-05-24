@@ -14,20 +14,14 @@ import '../../widgets/onboarding_background.dart';
 
 /// Invite sender screen — shown from ConnectFirst "Invite someone" or from
 /// Discover when inviting a contact not yet on Saanjh.
-///
-/// When [isParentInvite] is true, shows a two-step parent-focused flow:
-///   Step 1 — send via WhatsApp with a pre-composed Hindi message
-///   Step 2 — "Set it up for them": switches this device to parent mode
 class InviteScreen extends StatefulWidget {
   final String? prefillName;
   final String? prefillPhone;
-  final bool isParentInvite;
 
   const InviteScreen({
     super.key,
     this.prefillName,
     this.prefillPhone,
-    this.isParentInvite = false,
   });
 
   @override
@@ -118,20 +112,19 @@ class _InviteScreenState extends State<InviteScreen>
     if (mounted) setState(() => _launchingWa = false);
   }
 
-  Future<void> _activateParentMode() async {
+  Future<void> _activateSimpleMode() async {
     HapticFeedback.mediumImpact();
-    await UserStore.instance.setParentMode(true);
+    await UserStore.instance.setSimpleMode(true);
     if (!mounted) return;
-    // Go home — parent will see the simplified home screen.
     context.go(AppRoutes.home);
   }
 
-  void _showParentModeSheet() {
+  void _showSimpleModeSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _SetupForThemSheet(onActivate: _activateParentMode),
+      builder: (_) => _SetupForThemSheet(onActivate: _activateSimpleMode),
     );
   }
 
@@ -171,9 +164,7 @@ class _InviteScreenState extends State<InviteScreen>
                   }
                 }),
                 Expanded(
-                  child: widget.isParentInvite
-                      ? _buildParentBody()
-                      : _buildStandardBody(),
+                  child: _buildStandardBody(),
                 ),
               ],
             ),
@@ -183,7 +174,7 @@ class _InviteScreenState extends State<InviteScreen>
     );
   }
 
-  // ── Standard invite body ─────────────────────────────────────────────────
+  // ── Invite body ──────────────────────────────────────────────────────────
 
   Widget _buildStandardBody() {
     return Padding(
@@ -217,7 +208,12 @@ class _InviteScreenState extends State<InviteScreen>
           ),
           const Spacer(),
           _fade(
-            0.36,
+            0.30,
+            _SetupForThemCard(onTap: _showSimpleModeSheet),
+          ),
+          const SizedBox(height: 20),
+          _fade(
+            0.38,
             CtaPrimary(
               label: 'Share link  →',
               onPressed: _shareViaSystem,
@@ -225,142 +221,7 @@ class _InviteScreenState extends State<InviteScreen>
           ),
           const SizedBox(height: 12),
           _fade(
-            0.42,
-            Center(
-              child: TextButton(
-                onPressed: () {
-                  if (context.canPop()) {
-                    context.pop();
-                  } else {
-                    context.go(AppRoutes.home);
-                  }
-                },
-                child: Text('Cancel',
-                    style: AppTypography.label(
-                        size: 13, color: AppColors.textMuted)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Parent invite body ───────────────────────────────────────────────────
-
-  Widget _buildParentBody() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-      physics: const BouncingScrollPhysics(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _fade(
-            0.04,
-            Text('INVITE A PARENT',
-                style: AppTypography.eyebrow(
-                    size: 11, color: AppColors.emberBright)),
-          ),
-          const SizedBox(height: 14),
-          _fade(
-            0.10,
-            Text(
-              _hasName
-                  ? 'Invite ${_nameCtrl.text.trim()}\nto Saanjh'
-                  : 'Invite your parent\nto Saanjh',
-              style: AppTypography.title(size: 34, weight: FontWeight.w600)
-                  .copyWith(fontStyle: FontStyle.italic, height: 1.1),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _fade(
-            0.16,
-            Text(
-              'Parents get a simpler, warmer experience — just one big '
-              'play button and one record button.',
-              style: AppTypography.body(size: 14.5, color: AppColors.textMuted),
-            ),
-          ),
-          const SizedBox(height: 28),
-
-          // ── Fields ────────────────────────────────────────────────────
-          _fade(0.20, _FieldLabel('THEIR NAME')),
-          const SizedBox(height: 8),
-          _fade(
-            0.20,
-            _InviteField(
-              controller: _nameCtrl,
-              hint: 'e.g. Amma, Papa, Nana…',
-              textCapitalization: TextCapitalization.words,
-            ),
-          ),
-          const SizedBox(height: 16),
-          _fade(0.26, _FieldLabel('THEIR WHATSAPP NUMBER')),
-          const SizedBox(height: 8),
-          _fade(
-            0.26,
-            _InviteField(
-              controller: _phoneCtrl,
-              hint: '+91 98765 43210',
-              keyboardType: TextInputType.phone,
-            ),
-          ),
-          const SizedBox(height: 28),
-
-          // ── Step 1: WhatsApp ──────────────────────────────────────────
-          _fade(0.32, _StepHeader(step: '1', label: 'SEND THEM THE LINK')),
-          const SizedBox(height: 12),
-          _fade(
-            0.32,
-            _WhatsAppButton(
-              loading: _launchingWa,
-              enabled: _canSend,
-              onTap: _sendViaWhatsApp,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _fade(
-            0.34,
-            Text(
-              'Opens WhatsApp with a message in Hindi they can tap to download.',
-              style: AppTypography.caption(
-                  size: 12.5, color: AppColors.textFaint),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // ── Divider ───────────────────────────────────────────────────
-          _fade(
-            0.38,
-            Row(
-              children: [
-                Expanded(
-                    child: Divider(
-                        color: Colors.white.withValues(alpha: 0.08))),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('or',
-                      style: AppTypography.caption(
-                          size: 12, color: AppColors.textFaint)),
-                ),
-                Expanded(
-                    child: Divider(
-                        color: Colors.white.withValues(alpha: 0.08))),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // ── Step 2: Set it up for them ────────────────────────────────
-          _fade(
-              0.44, _StepHeader(step: '2', label: 'SET IT UP FOR THEM')),
-          const SizedBox(height: 12),
-          _fade(0.44, _SetupForThemCard(onTap: _showParentModeSheet)),
-          const SizedBox(height: 28),
-
-          // ── Cancel ────────────────────────────────────────────────────
-          _fade(
-            0.52,
+            0.44,
             Center(
               child: TextButton(
                 onPressed: () {
@@ -562,7 +423,7 @@ class _SetupForThemCardState extends State<_SetupForThemCard> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Switch this device to parent mode — '
+                    'Switch this device to simple mode — '
                     'a simpler home screen just for them.',
                     style: AppTypography.caption(
                         size: 12.5, color: AppColors.textMuted),
@@ -647,7 +508,7 @@ class _SetupForThemSheetState extends State<_SetupForThemSheet> {
           ),
           const SizedBox(height: 10),
           Text(
-            'This switches the app to parent mode — a simpler home screen '
+            'This switches the app to simple mode — a simpler home screen '
             'with just one play button and one record button. '
             'They can exit it anytime from Settings.',
             style: AppTypography.body(size: 14, color: AppColors.textMuted),
@@ -697,7 +558,7 @@ class _SetupForThemSheetState extends State<_SetupForThemSheet> {
                             color: AppColors.text),
                       )
                     : Text(
-                        'Switch to parent mode',
+                        'Switch to simple mode',
                         style: AppTypography.label(
                             size: 15,
                             weight: FontWeight.w600,
