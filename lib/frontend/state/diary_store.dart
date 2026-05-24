@@ -18,6 +18,7 @@ class DiaryEntry {
   final String? prompt; // prompt card text if record was prompted
   final String? occasionTag; // e.g. '🪔 Diwali greeting'
   final DateTime createdAt;
+  final bool isExpired; // true when diary_expires_at has passed (>24h)
   DateTime? listenedAt; // set when recipient plays the note
   double? moodEnergy; // 0.0–1.0, derived from amplitude analysis
   final List<DiaryEntry> reactions; // voice reactions to this entry
@@ -33,6 +34,7 @@ class DiaryEntry {
     this.prompt,
     this.occasionTag,
     required this.createdAt,
+    this.isExpired = false,
     this.listenedAt,
     this.moodEnergy,
     List<DiaryEntry>? reactions,

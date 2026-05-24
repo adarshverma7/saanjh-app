@@ -36,6 +36,7 @@ class _Entry {
   final String time;
   final bool listened;
   final String path;
+  final bool isExpired;
 
   const _Entry({
     required this.id,
@@ -52,6 +53,7 @@ class _Entry {
     required this.listened,
     // ignore: unused_element_parameter
     this.path = '',
+    this.isExpired = false,
   });
 }
 
@@ -127,6 +129,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         time: _formatTime(e.createdAt),
         listened: e.listenedAt != null,
         path: e.path,
+        isExpired: e.isExpired,
       );
     }).toList();
   }
@@ -466,7 +469,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                           physics: const BouncingScrollPhysics(),
                           children: [
                             for (int i = 0; i < _entries.length; i++)
-                              if (_entries[i].type == _EntryType.voice)
+                              if (_entries[i].isExpired)
+                                _ExpiredBubble(entry: _entries[i])
+                              else if (_entries[i].type == _EntryType.voice)
                                 _VoiceBubble(
                                   entry: _entries[i],
                                   diaryId: widget.diaryId,
@@ -499,8 +504,6 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                                   onDelete: () {
                                     final removedId = _entries[i].id;
                                     DiaryStore.instance.removeEntry(removedId);
-                                    // Optimistic local update — store
-                                    // notifies and rebuilds via _onDiaryStoreChange.
                                     setState(() {
                                       _entries = [
                                         ..._entries,
@@ -1069,6 +1072,67 @@ class _PromptDot extends StatelessWidget {
             ? AppColors.emberWarm
             : AppColors.emberWarm.withValues(alpha: 0.24),
         borderRadius: BorderRadius.circular(3),
+      ),
+    );
+  }
+}
+
+// ─── Expired bubble (tombstone) ───────────────────────────────────────────────
+
+class _ExpiredBubble extends StatelessWidget {
+  final _Entry entry;
+  const _ExpiredBubble({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final isMine = entry.isMine;
+    final icon = entry.type == _EntryType.video
+        ? Icons.videocam_off_rounded
+        : Icons.mic_off_rounded;
+    final label = entry.type == _EntryType.video ? 'Video' : 'Voice note';
+
+    return Align(
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(20).copyWith(
+            bottomRight: isMine ? const Radius.circular(4) : const Radius.circular(20),
+            bottomLeft: isMine ? const Radius.circular(20) : const Radius.circular(4),
+          ),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.06),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: AppColors.textFaint.withValues(alpha: 0.45)),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: AppTypography.label(
+                    size: 12,
+                    color: AppColors.textFaint.withValues(alpha: 0.50),
+                  ),
+                ),
+                Text(
+                  entry.time,
+                  style: AppTypography.label(
+                    size: 10.5,
+                    color: AppColors.textFaint.withValues(alpha: 0.35),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

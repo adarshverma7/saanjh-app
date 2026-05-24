@@ -14,7 +14,6 @@ class ApiClient {
   final _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
-      resetOnError: true,
     ),
   );
 
