@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../backend/entries_api.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
+import '../../state/user_store.dart';
 import '../../router/app_routes.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
@@ -75,6 +77,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   // Entries derived from DiaryStore — rebuilt whenever the store notifies.
   List<_Entry> _entries = const [];
 
+  // Backend loading
+  bool _isLoadingEntries = true;
+
   // Playback
   int? _playingIdx;
   AnimationController? _playCtrl;
@@ -101,6 +106,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     _contact = matches.isEmpty ? null : matches.first;
     _entries = _buildEntries();
     DiaryStore.instance.addListener(_onDiaryStoreChange);
+    _loadEntriesFromBackend();
   }
 
   // ── Entry mapping ────────────────────────────────────────────────────────
@@ -121,8 +127,8 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         type: e.type == 'video' ? _EntryType.video : _EntryType.voice,
         // durationSeconds defaults to 20 (max recording length) until real
         // audio playback is wired in Prompt 22.
-        duration: _formatDuration(20),
-        durationSeconds: 20,
+        duration: _formatDuration(e.durationSeconds > 0 ? e.durationSeconds : 20),
+        durationSeconds: e.durationSeconds > 0 ? e.durationSeconds : 20,
         transcript: e.transcript,
         prompt: e.prompt,
         occasionTag: e.occasionTag,
@@ -200,6 +206,46 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     });
   }
 
+  Future<void> _loadEntriesFromBackend() async {
+    try {
+      final result = await EntriesApi.instance.listEntries(widget.diaryId);
+      final items = (result['entries'] as List?) ?? [];
+      final myUserId = UserStore.instance.userId;
+      final existingIds = DiaryStore.instance
+          .entriesFor(widget.diaryId)
+          .map((e) => e.id)
+          .toSet();
+
+      final toAdd = <DiaryEntry>[];
+      for (final raw in items) {
+        final item = raw as Map<String, dynamic>;
+        final id = item['id'] as String;
+        if (existingIds.contains(id)) continue;
+
+        final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
+        toAdd.add(DiaryEntry(
+          id: id,
+          diaryId: widget.diaryId,
+          isMine: (item['author_id'] as String?) == myUserId,
+          type: item['entry_type'] as String? ?? 'voice',
+          path: '', // URL fetched lazily on play
+          transcript: item['transcription'] as String?,
+          createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
+          durationSeconds: item['duration_seconds'] as int? ?? 0,
+          isExpired: item['is_expired'] as bool? ?? false,
+          listenedAt: (item['play_count'] as int? ?? 0) > 0
+              ? DateTime.fromMillisecondsSinceEpoch(0)
+              : null,
+        ));
+      }
+      DiaryStore.instance.bulkAddEntries(toAdd);
+    } catch (_) {
+      // Network failure — show whatever is already in the store.
+    } finally {
+      if (mounted) setState(() => _isLoadingEntries = false);
+    }
+  }
+
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
     final max = _scrollCtrl.position.maxScrollExtent;
@@ -239,14 +285,30 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     final entry = _entries[idx];
     if (!entry.isMine) DiaryStore.instance.markListened(entry.id);
 
-    // ── Real audio path ──────────────────────────────────────────────────
-    if (entry.path.isNotEmpty) {
+    // ── Resolve playback source ──────────────────────────────────────────
+    // Local path: use it directly.
+    // No path (backend entry): fetch a 1-hour signed URL from the backend.
+    String? playSource = entry.path.isNotEmpty ? entry.path : null;
+    if (playSource == null) {
+      try {
+        final data = await EntriesApi.instance.getEntry(widget.diaryId, entry.id);
+        playSource = data['media_url'] as String?;
+      } catch (_) {}
+      if (!mounted) return;
+    }
+
+    // ── Real audio playback ──────────────────────────────────────────────
+    if (playSource != null) {
       try {
         final player = AudioPlayer();
         _player = player;
 
-        // Load the file; setFilePath returns the actual duration.
-        final duration = await player.setFilePath(entry.path);
+        final Duration? duration;
+        if (playSource.startsWith('http')) {
+          duration = await player.setUrl(playSource);
+        } else {
+          duration = await player.setFilePath(playSource);
+        }
         if (!mounted) { await player.dispose(); _player = null; return; }
 
         final playDuration = duration ?? Duration(seconds: entry.durationSeconds);
@@ -460,9 +522,16 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                 diaryId: widget.diaryId,
               ),
                 Expanded(
-                  child: _entries.isEmpty
-                      ? _EmptyThread()
-                      : ListView(
+                  child: _isLoadingEntries
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.ember,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : _entries.isEmpty
+                          ? _EmptyThread()
+                          : ListView(
                           controller: _scrollCtrl,
                           padding:
                               const EdgeInsets.fromLTRB(14, 12, 14, 120),

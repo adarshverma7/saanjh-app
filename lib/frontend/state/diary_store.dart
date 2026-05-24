@@ -18,6 +18,7 @@ class DiaryEntry {
   final String? prompt; // prompt card text if record was prompted
   final String? occasionTag; // e.g. '🪔 Diwali greeting'
   final DateTime createdAt;
+  final int durationSeconds; // 0 when unknown
   final bool isExpired; // true when diary_expires_at has passed (>24h)
   DateTime? listenedAt; // set when recipient plays the note
   double? moodEnergy; // 0.0–1.0, derived from amplitude analysis
@@ -34,6 +35,7 @@ class DiaryEntry {
     this.prompt,
     this.occasionTag,
     required this.createdAt,
+    this.durationSeconds = 0,
     this.isExpired = false,
     this.listenedAt,
     this.moodEnergy,
@@ -388,6 +390,13 @@ class DiaryStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void bulkAddEntries(List<DiaryEntry> entries) {
+    for (final e in entries) {
+      _entries.putIfAbsent(e.diaryId, () => []).add(e);
+    }
+    if (entries.isNotEmpty) notifyListeners();
+  }
+
   void markListened(String entryId) {
     for (final list in _entries.values) {
       for (final e in list) {
@@ -422,6 +431,8 @@ class DiaryStore extends ChangeNotifier {
             prompt: old.prompt,
             occasionTag: old.occasionTag,
             createdAt: old.createdAt,
+            durationSeconds: old.durationSeconds,
+            isExpired: old.isExpired,
             listenedAt: old.listenedAt,
             moodEnergy: old.moodEnergy,
             reactions: old.reactions,
