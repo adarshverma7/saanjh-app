@@ -39,15 +39,21 @@ class EntriesApi {
     required String contentType,
     void Function(int sent, int total)? onProgress,
   }) async {
-    final storageDio = Dio();
+    // Separate Dio without auth interceptor — Supabase signed URLs are self-contained.
+    // Stream-based upload triggers chunked transfer encoding (no Content-Length),
+    // which Supabase rejects. Sending Uint8List directly lets Dio set Content-Length.
+    final storageDio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 20),
+      sendTimeout: const Duration(seconds: 120),
+      receiveTimeout: const Duration(seconds: 30),
+    ));
     await storageDio.put(
       uploadUrl,
-      data: Stream.fromIterable([bytes]),
+      data: bytes,
       options: Options(
-        headers: {
-          'Content-Type': contentType,
-          'Content-Length': bytes.length.toString(),
-        },
+        headers: {'Content-Type': contentType},
+        // Prevent Dio from overriding the content-type we set.
+        contentType: contentType,
       ),
       onSendProgress: onProgress,
     );
