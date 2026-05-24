@@ -32,9 +32,11 @@ dependencies:
   dio: ^5.7.0
   flutter_secure_storage: ^9.2.2
   device_info_plus: ^10.1.0
-  # Firebase Auth (phone OTP)
+  # Firebase Auth (storage migrated to Supabase)
   firebase_core: ^3.13.0
   firebase_auth: ^5.5.2
+  # Audio recording
+  record: ^5.2.0
 
 dev_dependencies:
   flutter_test:

@@ -6,9 +6,12 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../backend/entries_api.dart';
 import '../../services/share_card_service.dart';
 import '../../services/transcription_service.dart';
 import '../../state/diary_store.dart';
@@ -82,6 +85,11 @@ class _RecordScreenState extends State<RecordScreen>
   VideoPlayerController? _vpCtrl;
   bool _vpReady = false;
 
+  // ─── Audio recorder ───────────────────────────────────────────
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  String? _audioPath;
+  bool _isSending = false;
+
   @override
   void initState() {
     super.initState();
@@ -114,6 +122,7 @@ class _RecordScreenState extends State<RecordScreen>
     _waveCtrl.dispose();
     _camCtrl?.dispose();
     _vpCtrl?.dispose();
+    _audioRecorder.dispose();
     super.dispose();
   }
 
@@ -176,13 +185,25 @@ class _RecordScreenState extends State<RecordScreen>
     _vpCtrl = null;
     _vpReady = false;
     _recordedFile = null;
+    _audioPath = null;
     _elapsed = 0;
     _recState = _RecState.idle;
   }
 
   // ─── Voice recording ──────────────────────────────────────────
 
-  void _startVoice() {
+  Future<void> _startVoice() async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _audioRecorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000),
+        path: path,
+      );
+    } catch (_) {
+      // Continue with UI-only if recording fails (e.g. permission denied).
+    }
+    if (!mounted) return;
     HapticFeedback.mediumImpact();
     _pulseCtrl.repeat(reverse: true);
     _waveCtrl.repeat();
@@ -220,7 +241,11 @@ class _RecordScreenState extends State<RecordScreen>
     _waveCtrl.stop();
     HapticFeedback.lightImpact();
 
-    if (_mode == _Mode.video && _camCtrl != null) {
+    if (_mode == _Mode.voice) {
+      try {
+        _audioPath = await _audioRecorder.stop();
+      } catch (_) {}
+    } else if (_camCtrl != null) {
       try {
         _recordedFile = await _camCtrl!.stopVideoRecording();
         await _initVideoPlayer();
@@ -263,7 +288,7 @@ class _RecordScreenState extends State<RecordScreen>
     if (widget.isPrivateReflection) {
       PersonalReflectionStore.instance.addReflection(PersonalReflection(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
-        audioPath: _recordedFile?.path ?? '',
+        audioPath: _audioPath ?? _recordedFile?.path ?? '',
         transcript: null,
         createdAt: DateTime.now(),
         prompt: widget.prompt,
@@ -278,7 +303,7 @@ class _RecordScreenState extends State<RecordScreen>
     final h = now.hourOfPeriod == 0 ? 12 : now.hourOfPeriod;
     final m = now.minute.toString().padLeft(2, '0');
     final time = '$h:$m ${now.period.name.toUpperCase()}';
-    final audioPath = _recordedFile?.path ?? '';
+    final filePath = _mode == _Mode.voice ? _audioPath : _recordedFile?.path;
     final sendTime = DateTime.now();
 
     // Determine all target diary IDs (broadcast list OR single target).
@@ -286,36 +311,100 @@ class _RecordScreenState extends State<RecordScreen>
         ? widget.broadcastTo!
         : (widget.targetDiaryId != null ? [widget.targetDiaryId!] : <String>[]);
 
-    for (final id in targets) {
-      store.updateSnippet(id, snippet, time);
-      if (widget.occasionTag != null) {
-        store.setOccasionTag(id, widget.occasionTag);
-      }
+    if (filePath != null && targets.isNotEmpty) {
+      // ── Upload to backend ──────────────────────────────────────────────────
+      setState(() => _isSending = true);
+      try {
+        final bytes = await File(filePath).readAsBytes();
+        final entryType = _mode == _Mode.voice ? 'voice' : 'video';
+        final fileExt = _mode == _Mode.voice ? 'm4a' : 'mp4';
+        final contentType = _mode == _Mode.voice ? 'audio/m4a' : 'video/mp4';
 
-      // Create a DiaryEntry in the store so transcripts and jar work.
-      final entry = DiaryEntry(
-        id: '${sendTime.millisecondsSinceEpoch}_$id',
-        diaryId: id,
-        isMine: true,
-        type: _mode == _Mode.voice ? 'voice' : 'video',
-        path: audioPath,
-        transcript: null,
-        prompt: widget.prompt,
-        occasionTag: widget.occasionTag,
-        createdAt: sendTime,
-        parentEntryId: widget.parentEntryId,
-      );
-      // Reaction entries are nested under the parent; regular entries go to diary.
-      if (widget.parentEntryId != null) {
-        store.addReaction(widget.parentEntryId!, entry);
-      } else {
-        store.addEntry(entry);
-      }
+        for (final id in targets) {
+          final uploadResult = await EntriesApi.instance.getUploadUrl(
+            connectionId: id,
+            entryType: entryType,
+            fileExtension: fileExt,
+            durationSeconds: _elapsed,
+            fileSizeBytes: bytes.length,
+          );
 
-      // Async transcription — updates entry when backend returns result.
-      TranscriptionService.instance.transcribeFile(audioPath).then((t) {
-        if (t != null) store.updateEntryTranscript(entry.id, t);
-      });
+          await EntriesApi.instance.uploadToStorage(
+            uploadUrl: uploadResult.uploadUrl,
+            bytes: bytes,
+            contentType: contentType,
+          );
+
+          await EntriesApi.instance.createEntry(
+            connectionId: id,
+            entryType: entryType,
+            mediaKey: uploadResult.mediaKey,
+            durationSeconds: _elapsed,
+            recordedAt: sendTime,
+          );
+
+          store.updateSnippet(id, snippet, time);
+          if (widget.occasionTag != null) {
+            store.setOccasionTag(id, widget.occasionTag);
+          }
+
+          final entry = DiaryEntry(
+            id: uploadResult.entryId,
+            diaryId: id,
+            isMine: true,
+            type: entryType,
+            path: filePath,
+            transcript: null,
+            prompt: widget.prompt,
+            occasionTag: widget.occasionTag,
+            createdAt: sendTime,
+            parentEntryId: widget.parentEntryId,
+          );
+          if (widget.parentEntryId != null) {
+            store.addReaction(widget.parentEntryId!, entry);
+          } else {
+            store.addEntry(entry);
+          }
+          TranscriptionService.instance.transcribeFile(filePath).then((t) {
+            if (t != null) store.updateEntryTranscript(entry.id, t);
+          });
+        }
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _isSending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to send. Please check your connection.'),
+          ),
+        );
+        return;
+      }
+      if (mounted) setState(() => _isSending = false);
+    } else {
+      // Local-only fallback (no file recorded yet or no targets).
+      for (final id in targets) {
+        store.updateSnippet(id, snippet, time);
+        if (widget.occasionTag != null) {
+          store.setOccasionTag(id, widget.occasionTag);
+        }
+        final entry = DiaryEntry(
+          id: '${sendTime.millisecondsSinceEpoch}_$id',
+          diaryId: id,
+          isMine: true,
+          type: _mode == _Mode.voice ? 'voice' : 'video',
+          path: filePath ?? '',
+          transcript: null,
+          prompt: widget.prompt,
+          occasionTag: widget.occasionTag,
+          createdAt: sendTime,
+          parentEntryId: widget.parentEntryId,
+        );
+        if (widget.parentEntryId != null) {
+          store.addReaction(widget.parentEntryId!, entry);
+        } else {
+          store.addEntry(entry);
+        }
+      }
     }
 
     // ── Share moment trigger ──────────────────────────────────────────────
@@ -340,7 +429,7 @@ class _RecordScreenState extends State<RecordScreen>
             contactName: contactName,
             duration: duration,
             createdAt: sendTime,
-            seed: audioPath.isEmpty ? targets.first.hashCode : audioPath.hashCode,
+            seed: filePath?.hashCode ?? targets.first.hashCode,
             isFirstSend: count == 1,
           ),
         );
@@ -440,6 +529,7 @@ class _RecordScreenState extends State<RecordScreen>
                   prompt: widget.prompt,
                   occasionTag: widget.occasionTag,
                   isPrivateReflection: widget.isPrivateReflection,
+                  isSending: _isSending,
                 ),
                 const SizedBox(height: 32),
               ],
@@ -724,6 +814,7 @@ class _BottomControls extends StatelessWidget {
   final String? prompt;
   final String? occasionTag;
   final bool isPrivateReflection;
+  final bool isSending;
 
   const _BottomControls({
     required this.mode,
@@ -741,6 +832,7 @@ class _BottomControls extends StatelessWidget {
     this.prompt,
     this.occasionTag,
     this.isPrivateReflection = false,
+    this.isSending = false,
   });
 
   @override
@@ -757,7 +849,8 @@ class _BottomControls extends StatelessWidget {
                   : mode == _Mode.video
                       ? '🎥  Send this video  →'
                       : '🎙  Send this note  →',
-              onPressed: onSend,
+              onPressed: isSending ? null : onSend,
+              loading: isSending,
             ),
             const SizedBox(height: 12),
             TextButton(

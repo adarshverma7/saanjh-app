@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
+
 import 'api_client.dart';
 
 class EntriesApi {
@@ -9,53 +12,52 @@ class EntriesApi {
 
   // ── Upload flow ─────────────────────────────────────────────────────────────
 
-  /// Step 1: get a pre-signed R2 URL for direct upload.
+  /// Step 1: get a canonical storage path + entry ID + signed upload URL from the backend.
   Future<UploadUrlResult> getUploadUrl({
     required String connectionId,
-    required String entryType,  // 'voice' | 'video'
-    required String mimeType,
-    required int fileSize,
+    required String entryType,       // 'voice' | 'video'
+    required String fileExtension,   // 'm4a'   | 'mp4'
+    required int durationSeconds,
+    required int fileSizeBytes,
   }) async {
     final res = await _dio.post(
       '/connections/$connectionId/entries/upload-url',
       data: {
-        'entry_type': entryType,
-        'mime_type':  mimeType,
-        'file_size':  fileSize,
+        'entry_type':       entryType,
+        'file_extension':   fileExtension,
+        'duration_seconds': durationSeconds,
+        'file_size_bytes':  fileSizeBytes,
       },
     );
     return UploadUrlResult.fromJson(res.data as Map<String, dynamic>);
   }
 
-  /// Step 2: upload bytes directly to R2 (NOT through the API server).
-  Future<void> uploadToR2({
-    required String presignedUrl,
-    required List<int> bytes,
-    required String mimeType,
+  /// Step 2: upload bytes directly to Supabase Storage via the signed URL.
+  Future<void> uploadToStorage({
+    required String uploadUrl,
+    required Uint8List bytes,
+    required String contentType,
     void Function(int sent, int total)? onProgress,
   }) async {
-    final uploadDio = Dio(); // plain Dio — no auth headers
-    await uploadDio.put(
-      presignedUrl,
-      data: Stream.fromIterable(bytes.map((b) => [b])),
+    final storageDio = Dio();
+    await storageDio.put(
+      uploadUrl,
+      data: Stream.fromIterable([bytes]),
       options: Options(
         headers: {
-          'Content-Type':   mimeType,
-          'Content-Length': bytes.length,
+          'Content-Type': contentType,
+          'Content-Length': bytes.length.toString(),
         },
-        followRedirects: false,
-        validateStatus: (s) => s != null && s < 400,
       ),
       onSendProgress: onProgress,
     );
   }
 
-  /// Step 3: confirm the entry with the backend.
+  /// Step 3: confirm the entry with the backend (verifies upload completed).
   Future<Map<String, dynamic>> createEntry({
     required String connectionId,
     required String entryType,
     required String mediaKey,
-    required String mimeType,
     int? durationSeconds,
     String? mood,
     DateTime? recordedAt,
@@ -63,9 +65,8 @@ class EntriesApi {
     final res = await _dio.post(
       '/connections/$connectionId/entries',
       data: {
-        'entry_type':       entryType,
-        'media_key':        mediaKey,
-        'mime_type':        mimeType,
+        'entry_type':  entryType,
+        'media_key':   mediaKey,
         if (durationSeconds != null) 'duration_seconds': durationSeconds,
         if (mood != null) 'mood': mood,
         if (recordedAt != null) 'recorded_at': recordedAt.toIso8601String(),
@@ -93,9 +94,17 @@ class EntriesApi {
     return res.data as Map<String, dynamic>;
   }
 
+  /// Diary thread — enforces 24-hour expiry (expired entries return no URL).
   Future<Map<String, dynamic>> getEntry(
       String connectionId, String entryId) async {
     final res = await _dio.get('/connections/$connectionId/entries/$entryId');
+    return res.data as Map<String, dynamic>;
+  }
+
+  /// Memory Tree — bypasses expiry so old moments are always playable.
+  Future<Map<String, dynamic>> getMomentsEntry(
+      String connectionId, String entryId) async {
+    final res = await _dio.get('/connections/$connectionId/entries/$entryId/moments');
     return res.data as Map<String, dynamic>;
   }
 
@@ -117,13 +126,19 @@ class EntriesApi {
 }
 
 class UploadUrlResult {
-  final String uploadUrl;
   final String mediaKey;
+  final String entryId;
+  final String uploadUrl;
 
-  const UploadUrlResult({required this.uploadUrl, required this.mediaKey});
+  const UploadUrlResult({
+    required this.mediaKey,
+    required this.entryId,
+    required this.uploadUrl,
+  });
 
   factory UploadUrlResult.fromJson(Map<String, dynamic> j) => UploadUrlResult(
-        uploadUrl: j['upload_url'] as String,
         mediaKey:  j['media_key']  as String,
+        entryId:   j['entry_id']   as String,
+        uploadUrl: j['upload_url'] as String,
       );
 }
