@@ -715,31 +715,26 @@ class DiaryStore extends ChangeNotifier {
     }
   }
 
-  /// Called when an upload fails for a non-connectivity reason. Marks the
-  /// entry so the UI can show a failed state.
+  /// Called when an upload fails for a non-connectivity reason. Removes the
+  /// pending entry from the thread so failed sends don't accumulate visually.
+  /// The snackbar in the record screen already informs the user.
   void markUploadFailed(String pendingId) {
-    for (final list in _entries.values) {
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId]!;
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == pendingId) {
-          final old = list[i];
-          list[i] = DiaryEntry(
-            id: old.id,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
-            path: old.path,
-            transcript: old.transcript,
-            prompt: old.prompt,
-            occasionTag: old.occasionTag,
-            createdAt: old.createdAt,
-            durationSeconds: old.durationSeconds,
-            listenedAt: old.listenedAt,
-            moodEnergy: old.moodEnergy,
-            reactions: old.reactions,
-            parentEntryId: old.parentEntryId,
-            isPending: false,
-            isFailed: true,
-          );
+          list.removeAt(i);
+          // If no more pending entries, clear the "Sending…" snippet.
+          final stillPending = list.any((e) => e.isPending);
+          if (!stillPending) {
+            final idx = _diaries.indexWhere((d) => d.id == diaryId);
+            if (idx != -1 && _diaries[idx].lastSnippet == '⏳ Sending...') {
+              _diaries[idx] = _diaries[idx].copyWith(
+                lastSnippet: 'Send failed — tap to record again',
+                lastTime: '',
+              );
+            }
+          }
           notifyListeners();
           return;
         }

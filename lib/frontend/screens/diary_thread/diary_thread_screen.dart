@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../backend/entries_api.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
+import '../../state/send_queue_store.dart';
 import '../../state/user_store.dart';
 import '../../router/app_routes.dart';
 import '../../theme/app_colors.dart';
@@ -105,6 +106,8 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         .where((d) => d.id == widget.diaryId);
     _contact = matches.isEmpty ? null : matches.first;
     _entries = _buildEntries();
+    // Skip the loading spinner when the store already has cached entries.
+    _isLoadingEntries = _entries.isEmpty;
     DiaryStore.instance.addListener(_onDiaryStoreChange);
     _loadEntriesFromBackend();
   }
@@ -207,6 +210,21 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   }
 
   Future<void> _loadEntriesFromBackend() async {
+    // Remove stale pending/failed local entries not actively being retried.
+    // This prevents duplicates when the screen is recreated and backend entries
+    // are re-fetched alongside leftover local IDs from a previous session.
+    final queuedIds = SendQueueStore.instance.uploads
+        .map((u) => u.pendingLocalId)
+        .toSet();
+    final staleIds = DiaryStore.instance
+        .entriesFor(widget.diaryId)
+        .where((e) => (e.isPending || e.isFailed) && !queuedIds.contains(e.id))
+        .map((e) => e.id)
+        .toList();
+    for (final id in staleIds) {
+      DiaryStore.instance.removeEntry(id);
+    }
+
     try {
       final result = await EntriesApi.instance.listEntries(widget.diaryId);
       final items = (result['entries'] as List?) ?? [];

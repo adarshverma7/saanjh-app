@@ -322,6 +322,9 @@ class _RecordScreenState extends State<RecordScreen>
       // Unique prefix for all pending entries created in this send batch.
       final batchId = sendTime.millisecondsSinceEpoch.toString();
 
+      // Clamp to backend's accepted range: @Min(1) @Max(20).
+      final effectiveDuration = _elapsed.clamp(1, 20);
+
       // Add pending entries immediately so the user sees "Sending..." at once.
       for (final id in targets) {
         final localId = '${batchId}_$id';
@@ -334,7 +337,7 @@ class _RecordScreenState extends State<RecordScreen>
           prompt:          widget.prompt,
           occasionTag:     widget.occasionTag,
           createdAt:       sendTime,
-          durationSeconds: _elapsed,
+          durationSeconds: effectiveDuration,
           parentEntryId:   widget.parentEntryId,
           isPending:       true,
         );
@@ -352,6 +355,18 @@ class _RecordScreenState extends State<RecordScreen>
       try {
         final bytes = await File(filePath).readAsBytes();
 
+        if (bytes.length < 1000) {
+          for (final id in targets) {
+            store.markUploadFailed('${batchId}_$id');
+          }
+          if (!mounted) return;
+          setState(() => _isSending = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Recording too short — hold longer to record.')),
+          );
+          return;
+        }
+
         for (final id in targets) {
           final localId = '${batchId}_$id';
           try {
@@ -359,7 +374,7 @@ class _RecordScreenState extends State<RecordScreen>
               connectionId:    id,
               entryType:       entryType,
               fileExtension:   fileExt,
-              durationSeconds: _elapsed,
+              durationSeconds: effectiveDuration,
               fileSizeBytes:   bytes.length,
             );
 
@@ -373,7 +388,7 @@ class _RecordScreenState extends State<RecordScreen>
               connectionId:    id,
               entryType:       entryType,
               mediaKey:        uploadResult.mediaKey,
-              durationSeconds: _elapsed,
+              durationSeconds: effectiveDuration,
               recordedAt:      sendTime,
             );
 
@@ -394,7 +409,7 @@ class _RecordScreenState extends State<RecordScreen>
                 entryType:       entryType,
                 fileExt:         fileExt,
                 contentType:     contentType,
-                durationSeconds: _elapsed,
+                durationSeconds: effectiveDuration,
                 recordedAt:      sendTime,
                 prompt:          widget.prompt,
                 occasionTag:     widget.occasionTag,
