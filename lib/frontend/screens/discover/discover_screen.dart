@@ -100,36 +100,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           : null;
 
       if (connectionId == null) {
-        // Both users are on Saanjh — create/surface a connection via invite.
-        // Use .toString() on the extracted value to handle int/string backend variance.
-        try {
-          final res = await ConnectionsApi.instance.createInvite(
-            relationshipType: 'friend',
-            connectionName: contact.name,
-            invitedPhone: contact.phone,
-          );
-          final raw = res['connection_id']
-                   ?? (res['connection'] as Map?)?['id'];
-          connectionId = raw?.toString();
-        } catch (e) {
-          debugPrint('[discover] createInvite error: $e');
-          // Fall through to connections-list lookup below.
-        }
-      }
-
-      // If the invite didn't yield a connection_id (backend only created an
-      // invite link, not a connection), scan the connections list — the backend
-      // may have already matched these two users.
-      if (connectionId == null) {
-        final list = await ConnectionsApi.instance.getConnections();
-        for (final c in list) {
-          final partner = c['partner'] as Map<String, dynamic>? ?? {};
-          final phone = partner['phone'] as String? ?? '';
-          if (phone == contact.phone) {
-            connectionId = c['id']?.toString();
-            break;
-          }
-        }
+        // Both users are on Saanjh — create or surface a direct connection.
+        final res = await ConnectionsApi.instance.connectDirect(
+          phone: contact.phone,
+          connectionName: contact.name,
+        );
+        connectionId = res['connection_id']?.toString();
       }
 
       if (connectionId == null || connectionId.isEmpty) {
@@ -150,7 +126,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       if (mounted) _showToast("${contact.name}'s diary is ready");
     } catch (e) {
       debugPrint('[discover] _startDiary error: $e');
-      if (mounted) _showToast("Error: $e");
+      if (mounted) _showToast("Couldn't connect. Please try again.");
     } finally {
       if (mounted) setState(() => _connecting.remove(contact.phone));
     }
@@ -166,7 +142,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   void _showToast(String msg) {
     setState(() => _toast = msg);
-    Future.delayed(const Duration(milliseconds: 5000), () {
+    Future.delayed(const Duration(milliseconds: 2500), () {
       if (mounted) setState(() => _toast = null);
     });
   }
@@ -1132,14 +1108,11 @@ class _ToastBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.info_outline_rounded,
+          const Icon(Icons.check_circle_rounded,
               size: 14, color: Color(0xFF7CD992)),
           const SizedBox(width: 8),
-          Flexible(
-            child: Text(message,
-                style: AppTypography.label(size: 12, color: AppColors.text),
-                softWrap: true),
-          ),
+          Text(message,
+              style: AppTypography.label(size: 13, color: AppColors.text)),
         ],
       ),
     );
