@@ -57,6 +57,7 @@ class _NameEntryScreenState extends State<NameEntryScreen>
     HapticFeedback.lightImpact();
     setState(() => _continuing = true);
     await UserStore.instance.setName(_nameCtrl.text.trim());
+    await UserStore.instance.setOnboarded(true);
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     context.go(AppRoutes.connectFirst);
