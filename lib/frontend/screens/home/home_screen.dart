@@ -83,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen>
     FlickerStore.instance.addListener(_onStoreChangeForWidget);
     UserStore.instance.addListener(_onUserStoreChange);
     UserStore.instance.loadPrefs();
+    DiaryStore.instance.loadConnections();
     OnThisDayService.instance.load();
     _maybeShowOnThisDayOrMorning();
     // Schedule weekly digest notification (runs on every open, guards internally).

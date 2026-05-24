@@ -34,7 +34,13 @@ class ConnectionsApi {
 
   Future<List<Map<String, dynamic>>> getConnections() async {
     final res = await _dio.get('/connections');
-    return (res.data as List).cast<Map<String, dynamic>>();
+    final data = res.data;
+    // Backend returns { "connections": [...] }; handle both shapes defensively.
+    if (data is List) return data.cast<Map<String, dynamic>>();
+    if (data is Map && data['connections'] is List) {
+      return (data['connections'] as List).cast<Map<String, dynamic>>();
+    }
+    return [];
   }
 
   Future<Map<String, dynamic>> getConnectionHealth(String connectionId) async {

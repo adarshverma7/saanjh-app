@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 
+import '../../backend/connections_api.dart';
 import '../theme/app_colors.dart';
 
 // ─── Relationship weather ─────────────────────────────────────────────────────
@@ -611,6 +612,58 @@ class DiaryStore extends ChangeNotifier {
   // ═════════════════════════════════════════════════════════════════════════
   // MUTATIONS
   // ═════════════════════════════════════════════════════════════════════════
+
+  /// Loads the user's connections from the backend and populates the store.
+  /// Safe to call multiple times — skips entries already present by ID.
+  Future<void> loadConnections() async {
+    try {
+      final connections = await ConnectionsApi.instance.getConnections();
+      var changed = false;
+
+      for (final c in connections) {
+        if ((c['status'] as String?) == 'deleted') continue;
+        final id = c['id'] as String? ?? '';
+        if (id.isEmpty || has(id)) continue;
+
+        final partner = c['partner'] as Map<String, dynamic>? ?? {};
+        final rawName = (c['connection_name'] as String?)?.trim() ?? '';
+        final name = rawName.isNotEmpty
+            ? rawName
+            : (partner['name'] as String? ?? '').trim();
+        if (name.isEmpty) continue;
+
+        final initial = name[0].toUpperCase();
+        final hash = name.codeUnits.fold(0, (a, b) => a + b);
+        final color = DiaryContact.avatarPalette[hash % DiaryContact.avatarPalette.length];
+
+        _diaries.add(DiaryContact(
+          id: id,
+          name: name,
+          relation: c['relationship_type'] as String? ?? 'Contact',
+          phone: partner['phone'] as String? ?? '',
+          initial: initial,
+          avatarColor: color,
+        ));
+
+        // Restore streak data from backend.
+        final streak = c['streak_count'] as int? ?? 0;
+        if (streak > 0) {
+          _streakDays[id] = streak;
+          final lastAt = c['last_entry_at'] as String?;
+          if (lastAt != null) {
+            final dt = DateTime.tryParse(lastAt);
+            if (dt != null) _lastSentDate[id] = dt;
+          }
+        }
+
+        changed = true;
+      }
+
+      if (changed) notifyListeners();
+    } catch (_) {
+      // Network unavailable — in-memory state remains unchanged.
+    }
+  }
 
   void add(DiaryContact contact) {
     if (has(contact.id)) return;
