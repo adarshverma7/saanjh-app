@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -370,13 +371,12 @@ class _RecordScreenState extends State<RecordScreen>
             if (t != null) store.updateEntryTranscript(entry.id, t);
           });
         }
-      } catch (_) {
+      } catch (e) {
         if (!mounted) return;
         setState(() => _isSending = false);
+        final msg = _uploadErrorMessage(e);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to send. Please check your connection.'),
-          ),
+          SnackBar(content: Text(msg)),
         );
         return;
       }
@@ -440,6 +440,30 @@ class _RecordScreenState extends State<RecordScreen>
 
     if (!mounted) return;
     context.pop();
+  }
+
+  String _uploadErrorMessage(Object e) {
+    if (e is DioException) {
+      switch (e.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.sendTimeout:
+          return 'Upload timed out. Check your internet connection and try again.';
+        case DioExceptionType.connectionError:
+          return 'No internet connection. Please try again.';
+        case DioExceptionType.badResponse:
+          final code = e.response?.statusCode;
+          if (code == 401 || code == 403) {
+            return 'Session expired. Please restart the app and try again.';
+          }
+          if (code != null && code >= 500) {
+            return 'Server error ($code). Please try again in a moment.';
+          }
+          return 'Upload failed (error $code). Please try again.';
+        default:
+          break;
+      }
+    }
+    return 'Failed to send. Please check your connection and try again.';
   }
 
   // Returns the display name of the primary recipient.
