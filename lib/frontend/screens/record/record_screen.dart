@@ -358,6 +358,7 @@ class _RecordScreenState extends State<RecordScreen>
             prompt: widget.prompt,
             occasionTag: widget.occasionTag,
             createdAt: sendTime,
+            durationSeconds: _elapsed,
             parentEntryId: widget.parentEntryId,
           );
           if (widget.parentEntryId != null) {
