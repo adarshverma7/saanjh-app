@@ -15,7 +15,7 @@ class ConnectionsApi {
     final res = await _dio.post('/connections/invite', data: {
       'relationship_type': relationshipType,
       'connection_name': connectionName,
-      'invited_phone': ?invitedPhone,
+      'phone': ?invitedPhone,
     });
     return res.data as Map<String, dynamic>;
   }
@@ -41,6 +41,21 @@ class ConnectionsApi {
       return (data['connections'] as List).cast<Map<String, dynamic>>();
     }
     return [];
+  }
+
+  /// Connects directly with an existing Saanjh user (both sides already on the app).
+  /// Returns existing connection if one already exists, otherwise creates it.
+  Future<Map<String, dynamic>> connectDirect({
+    required String phone,
+    required String connectionName,
+    String relationshipType = 'friends',
+  }) async {
+    final res = await _dio.post('/connections/connect-direct', data: {
+      'phone': phone,
+      'connection_name': connectionName,
+      'relationship_type': relationshipType,
+    });
+    return res.data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> getConnectionHealth(String connectionId) async {
