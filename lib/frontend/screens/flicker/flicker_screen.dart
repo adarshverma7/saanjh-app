@@ -91,7 +91,12 @@ class _FlickerScreenState extends State<FlickerScreen>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openHaptic());
+    // Re-derive phase when backend data arrives (e.g., already sent today).
+    _store.addListener(_syncPhaseFromStore);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openHaptic();
+      _loadFlickerData();
+    });
     SharedPreferences.getInstance().then((prefs) {
       if (mounted) {
         setState(() => _flickerTapMode = prefs.getBool('flicker_tap_mode') ?? false);
@@ -112,12 +117,26 @@ class _FlickerScreenState extends State<FlickerScreen>
 
   @override
   void dispose() {
+    _store.removeListener(_syncPhaseFromStore);
     _holdCtrl.dispose();
     _breatheCtrl.dispose();
     _burstCtrl.dispose();
     _ritualCtrl.dispose();
     _stopVibration();
     super.dispose();
+  }
+
+  // When the store updates (e.g., backend data loaded), re-derive phase if
+  // we haven't started interacting yet.
+  void _syncPhaseFromStore() {
+    if (!mounted || _phase != _Phase.ready) return;
+    setState(_initPhase);
+  }
+
+  void _loadFlickerData() {
+    final diaries = _diaries;
+    if (diaries.isEmpty) return;
+    _store.loadFlickerStatus(diaries);
   }
 
   Future<void> _openHaptic() async {

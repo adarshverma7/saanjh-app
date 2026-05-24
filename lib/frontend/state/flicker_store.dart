@@ -1,4 +1,7 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+
+import '../../backend/flicker_api.dart';
+import 'diary_store.dart';
 
 class FlickerRecord {
   final String diaryId;
@@ -109,6 +112,17 @@ class FlickerStore extends ChangeNotifier {
       isMine: true,
     ));
     notifyListeners();
+    FlickerApi.instance.sendFlicker(diaryId).then((res) {
+      if (res['is_mutual'] == true && !hasThemFlickeredToday(diaryId)) {
+        _records.add(FlickerRecord(
+          diaryId: diaryId,
+          personName: personName,
+          sentAt: DateTime.now(),
+          isMine: false,
+        ));
+        notifyListeners();
+      }
+    }).catchError((_) {});
   }
 
   void sendFlickerToMany(List<String> diaryIds, List<String> names) {
@@ -121,8 +135,64 @@ class FlickerStore extends ChangeNotifier {
         sentAt: now,
         isMine: true,
       ));
+      // Fire-and-forget — optimistic update already applied above.
+      final id = diaryIds[i];
+      final name = names[i];
+      FlickerApi.instance.sendFlicker(id).then((res) {
+        if (res['is_mutual'] == true && !hasThemFlickeredToday(id)) {
+          _records.add(FlickerRecord(
+            diaryId: id,
+            personName: name,
+            sentAt: DateTime.now(),
+            isMine: false,
+          ));
+          notifyListeners();
+        }
+      }).catchError((_) {});
     }
     notifyListeners();
+  }
+
+  /// Loads today's flicker status from the backend for each connection.
+  /// Call on screen init so the UI reflects the real server state.
+  Future<void> loadFlickerStatus(List<DiaryContact> diaries) async {
+    var changed = false;
+    for (final diary in diaries) {
+      try {
+        final res = await FlickerApi.instance.getFlickerStatus(diary.id);
+        final myAt = res['my_last_flicker_at'] as String?;
+        final theirAt = res['partner_last_flicker_at'] as String?;
+
+        if (myAt != null) {
+          final dt = DateTime.tryParse(myAt);
+          if (dt != null && _isToday(dt) && !hasMeFlickeredToday(diary.id)) {
+            _records.add(FlickerRecord(
+              diaryId: diary.id,
+              personName: diary.name,
+              sentAt: dt,
+              isMine: true,
+            ));
+            changed = true;
+          }
+        }
+
+        if (theirAt != null) {
+          final dt = DateTime.tryParse(theirAt);
+          if (dt != null && _isToday(dt) && !hasThemFlickeredToday(diary.id)) {
+            _records.add(FlickerRecord(
+              diaryId: diary.id,
+              personName: diary.name,
+              sentAt: dt,
+              isMine: false,
+            ));
+            changed = true;
+          }
+        }
+      } catch (_) {
+        // Ignore individual failures — partial data is fine.
+      }
+    }
+    if (changed) notifyListeners();
   }
 
   // ── Dot opacity (dims as the pulse ages through the day) ──────────────────
@@ -134,4 +204,3 @@ class FlickerStore extends ChangeNotifier {
     return (0.90 - hours * 0.06).clamp(0.18, 0.90);
   }
 }
-
