@@ -1,4 +1,5 @@
-﻿import 'dart:math' as math;
+﻿import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -71,7 +72,7 @@ class DiaryThreadScreen extends StatefulWidget {
 }
 
 class _DiaryThreadScreenState extends State<DiaryThreadScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   // Resolved contact — looked up once on init from the diary store.
   late final DiaryContact? _contact;
 
@@ -98,6 +99,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   // Off-screen streak share card key
   final _streakCardKey = GlobalKey();
 
+  // Polling timer — fetches new entries from the backend every 15 seconds.
+  Timer? _pollTimer;
+
   @override
   void initState() {
     super.initState();
@@ -109,7 +113,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     // Skip the loading spinner when the store already has cached entries.
     _isLoadingEntries = _entries.isEmpty;
     DiaryStore.instance.addListener(_onDiaryStoreChange);
+    WidgetsBinding.instance.addObserver(this);
     _loadEntriesFromBackend();
+    _startPollTimer();
   }
 
   // ── Entry mapping ────────────────────────────────────────────────────────
@@ -162,11 +168,73 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     DiaryStore.instance.removeListener(_onDiaryStoreChange);
     _playCtrl?.dispose();
     _player?.dispose();
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _pollNewEntries();
+      _startPollTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+  }
+
+  void _startPollTimer() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) _pollNewEntries();
+    });
+  }
+
+  // Fetches only new entries from the backend and adds them to the store.
+  // Skips the stale-entry cleanup done on initial load so active uploads
+  // are not removed from the thread while they're in progress.
+  Future<void> _pollNewEntries() async {
+    try {
+      final result = await EntriesApi.instance.listEntries(widget.diaryId);
+      final items = (result['entries'] as List?) ?? [];
+      final myUserId = UserStore.instance.userId;
+      final existingIds = DiaryStore.instance
+          .entriesFor(widget.diaryId)
+          .map((e) => e.id)
+          .toSet();
+
+      final toAdd = <DiaryEntry>[];
+      for (final raw in items) {
+        final item = raw as Map<String, dynamic>;
+        final id = item['id'] as String;
+        if (existingIds.contains(id)) continue;
+
+        final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
+        toAdd.add(DiaryEntry(
+          id: id,
+          diaryId: widget.diaryId,
+          isMine: (item['author_id'] as String?) == myUserId,
+          type: item['entry_type'] as String? ?? 'voice',
+          path: '',
+          transcript: item['transcription'] as String?,
+          createdAt:
+              dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
+          durationSeconds: item['duration_seconds'] as int? ?? 0,
+          isExpired: item['is_expired'] as bool? ?? false,
+          listenedAt: (item['play_count'] as int? ?? 0) > 0
+              ? DateTime.fromMillisecondsSinceEpoch(0)
+              : null,
+        ));
+      }
+      if (toAdd.isNotEmpty && mounted) {
+        DiaryStore.instance.bulkAddEntries(toAdd);
+      }
+    } catch (_) {}
   }
 
   void _onDiaryStoreChange() {
