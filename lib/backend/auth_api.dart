@@ -133,6 +133,7 @@ class AuthResult {
   final String userId;
   final bool isNewUser;
   final bool isOnboarded;
+  final String? name;
 
   const AuthResult({
     required this.accessToken,
@@ -140,14 +141,18 @@ class AuthResult {
     required this.userId,
     required this.isNewUser,
     required this.isOnboarded,
+    this.name,
   });
 
-  factory AuthResult.fromJson(Map<String, dynamic> j) => AuthResult(
-        accessToken:  j['access_token']  as String,
-        refreshToken: j['refresh_token'] as String,
-        userId: (j['user'] as Map<String, dynamic>)['id'] as String,
-        isNewUser:   j['is_new_user']   as bool? ?? false,
-        isOnboarded: (j['user'] as Map<String, dynamic>)['is_onboarded']
-                as bool? ?? false,
-      );
+  factory AuthResult.fromJson(Map<String, dynamic> j) {
+    final user = j['user'] as Map<String, dynamic>;
+    return AuthResult(
+      accessToken:  j['access_token']  as String,
+      refreshToken: j['refresh_token'] as String,
+      userId:      user['id']          as String,
+      isNewUser:   j['is_new_user']    as bool? ?? false,
+      isOnboarded: user['is_onboarded'] as bool? ?? false,
+      name:        user['name']         as String?,
+    );
+  }
 }

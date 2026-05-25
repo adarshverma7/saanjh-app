@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../backend/users_api.dart' show UsersApi;
 import '../../router/app_routes.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
@@ -24,10 +25,12 @@ class _NameEntryScreenState extends State<NameEntryScreen>
   late final TextEditingController _nameCtrl;
   final _focusNode = FocusNode();
   bool _continuing = false;
+  late final bool _isReturningUser;
 
   @override
   void initState() {
     super.initState();
+    _isReturningUser = UserStore.instance.hasName;
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -36,10 +39,12 @@ class _NameEntryScreenState extends State<NameEntryScreen>
     _nameCtrl = TextEditingController(text: UserStore.instance.name);
     _nameCtrl.addListener(() => setState(() {}));
 
-    // Auto-focus the field after entrance animation settles.
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) _focusNode.requestFocus();
-    });
+    // Auto-focus only for new users; returning users can just tap Continue.
+    if (!_isReturningUser) {
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
   }
 
   @override
@@ -56,7 +61,16 @@ class _NameEntryScreenState extends State<NameEntryScreen>
     if (!_isValid || _continuing) return;
     HapticFeedback.lightImpact();
     setState(() => _continuing = true);
-    await UserStore.instance.setName(_nameCtrl.text.trim());
+
+    final name = _nameCtrl.text.trim();
+
+    // Persist to backend — non-fatal if offline, local state is the fallback
+    try {
+      await UsersApi.instance.updateProfile(name: name);
+      await UsersApi.instance.completeOnboarding();
+    } catch (_) {}
+
+    await UserStore.instance.setName(name);
     await UserStore.instance.setOnboarded(true);
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
@@ -115,7 +129,9 @@ class _NameEntryScreenState extends State<NameEntryScreen>
                         _fade(
                           delay: 0.06,
                           child: Text(
-                            'STEP 4 — YOUR NAME',
+                            _isReturningUser
+                                ? 'WELCOME BACK'
+                                : 'STEP 4 — YOUR NAME',
                             style: AppTypography.eyebrow(
                               size: 11,
                               color: AppColors.emberBright,
@@ -125,32 +141,55 @@ class _NameEntryScreenState extends State<NameEntryScreen>
                         const SizedBox(height: 16),
                         _fade(
                           delay: 0.14,
-                          child: Text.rich(
-                            TextSpan(
-                              style: AppTypography.title(
-                                      size: 38,
-                                      weight: FontWeight.w600)
-                                  .copyWith(
-                                      height: 1.08,
-                                      letterSpacing: -0.015 * 38),
-                              children: [
-                                const TextSpan(text: 'What should\nwe call '),
-                                TextSpan(
-                                  text: 'you?',
-                                  style: const TextStyle(
-                                    fontStyle: FontStyle.italic,
-                                    color: AppColors.emberBright,
+                          child: _isReturningUser
+                              ? Text.rich(
+                                  TextSpan(
+                                    style: AppTypography.title(
+                                            size: 38,
+                                            weight: FontWeight.w600)
+                                        .copyWith(
+                                            height: 1.08,
+                                            letterSpacing: -0.015 * 38),
+                                    children: [
+                                      const TextSpan(text: 'Good to have\nyou back, '),
+                                      TextSpan(
+                                        text: '${UserStore.instance.name}.',
+                                        style: const TextStyle(
+                                          fontStyle: FontStyle.italic,
+                                          color: AppColors.emberBright,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : Text.rich(
+                                  TextSpan(
+                                    style: AppTypography.title(
+                                            size: 38,
+                                            weight: FontWeight.w600)
+                                        .copyWith(
+                                            height: 1.08,
+                                            letterSpacing: -0.015 * 38),
+                                    children: [
+                                      const TextSpan(text: 'What should\nwe call '),
+                                      TextSpan(
+                                        text: 'you?',
+                                        style: const TextStyle(
+                                          fontStyle: FontStyle.italic,
+                                          color: AppColors.emberBright,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
                         ),
                         const SizedBox(height: 12),
                         _fade(
                           delay: 0.22,
                           child: Text(
-                            'This is how your diary connections will see you.',
+                            _isReturningUser
+                                ? 'Your diaries are waiting. Edit your name below if needed.'
+                                : 'This is how your diary connections will see you.',
                             style: AppTypography.body(
                                 size: 15,
                                 color: AppColors.textMuted),

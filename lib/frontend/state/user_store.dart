@@ -94,6 +94,10 @@ class UserStore extends ChangeNotifier {
     _userId      = result.userId;
     await _saveLoggedIn(true);
     await _saveOnboarded(result.isOnboarded);
+    // Restore name from server for returning users
+    if (result.name != null && result.name!.isNotEmpty) {
+      await setName(result.name!);
+    }
     notifyListeners();
   }
 
