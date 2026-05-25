@@ -7,6 +7,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
@@ -123,6 +124,10 @@ class _HomeScreenState extends State<HomeScreen>
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeShowAnniversaryBanner();
+    });
+    // FCM notification taps — both for backgrounded and terminated app states.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _handleFcmTaps();
     });
   }
 
@@ -399,8 +404,41 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// Reads the device ID and queues a token registration with the backend.
-  /// When `firebase_messaging` is added, swap the placeholder token fetch here.
+  // ── FCM notification tap handling ─────────────────────────────────────────
+
+  void _handleFcmTaps() {
+    // App was in background — user tapped the FCM notification to open it.
+    FirebaseMessaging.onMessageOpenedApp.listen(_routeFcmMessage);
+
+    // App was terminated — FCM notification was the launch trigger.
+    FirebaseMessaging.instance.getInitialMessage().then((msg) {
+      if (msg != null) _routeFcmMessage(msg);
+    });
+
+    // Foreground FCM: suppress default heads-up (our overlay already shows).
+    FirebaseMessaging.onMessage.listen((msg) {
+      // Overlay is driven by polling — no duplicate action needed here.
+      // The local notification from _showFlickerLocalNotif handles ambient alerts.
+    });
+
+    // Refresh FCM token on rotation (Firebase can rotate tokens).
+    FirebaseMessaging.instance.onTokenRefresh.listen((_) {
+      _registerDeviceToken();
+    });
+  }
+
+  void _routeFcmMessage(RemoteMessage message) {
+    if (!mounted) return;
+    final type    = message.data['type']     as String?;
+    final diaryId = message.data['diary_id'] as String?;
+
+    if (type == 'flicker' && diaryId != null) {
+      context.push(AppRoutes.flicker, extra: {'targetDiaryId': diaryId});
+    } else if (diaryId != null) {
+      context.push(AppRoutes.diaryThread, extra: {'diaryId': diaryId});
+    }
+  }
+
   Future<void> _registerDeviceToken() async {
     try {
       final info = DeviceInfoPlugin();
@@ -418,9 +456,7 @@ class _HomeScreenState extends State<HomeScreen>
         return; // Desktop — no push notifications
       }
 
-      // TODO: replace with FirebaseMessaging.instance.getToken() once
-      // firebase_messaging is added to pubspec.yaml.
-      const fcmToken = ''; // placeholder until firebase_messaging is wired up
+      final fcmToken = await FirebaseMessaging.instance.getToken() ?? '';
       if (fcmToken.isEmpty) return;
 
       try {

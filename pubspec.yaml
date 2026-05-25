@@ -35,6 +35,7 @@ dependencies:
   # Firebase Auth (storage migrated to Supabase)
   firebase_core: ^3.13.0
   firebase_auth: ^5.5.2
+  firebase_messaging: ^15.2.5
   # Audio recording
   record: ^6.2.1
   smart_auth: ^3.2.0
