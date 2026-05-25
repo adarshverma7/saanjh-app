@@ -39,7 +39,7 @@ class AuthApi {
   }
 
   /// Step 2: verifies the OTP entered by the user.
-  /// Returns null if the OTP is wrong.
+  /// Returns null if the OTP is wrong or any Firebase error occurs.
   Future<AuthResult?> verifyOtp({
     required String verificationId,
     required String smsCode,
@@ -50,12 +50,8 @@ class AuthApi {
         smsCode: smsCode,
       );
       return await _signInWithCredential(credential);
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'invalid-verification-code' ||
-          e.code == 'invalid-verification-id') {
-        return null;
-      }
-      rethrow;
+    } on FirebaseAuthException {
+      return null;
     }
   }
 

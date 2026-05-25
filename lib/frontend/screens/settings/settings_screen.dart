@@ -53,6 +53,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (!confirmed || !mounted) return;
     HapticFeedback.mediumImpact();
+    await UserStore.instance.logout();
+    if (!mounted) return;
     context.go(AppRoutes.splash);
   }
 

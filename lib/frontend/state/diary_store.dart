@@ -624,6 +624,24 @@ class DiaryStore extends ChangeNotifier {
   // MUTATIONS
   // ═════════════════════════════════════════════════════════════════════════
 
+  /// Clears all in-memory state on logout so a fresh login starts clean.
+  void reset() {
+    _diaries.clear();
+    _entries.clear();
+    _pinned.clear();
+    _muted.clear();
+    _favourites.clear();
+    _locked.clear();
+    _archived.clear();
+    _streakDays.clear();
+    _lastSentDate.clear();
+    _streakJustBroke.clear();
+    _justResumed.clear();
+    _milestoneReached.clear();
+    _isLoading = true;
+    notifyListeners();
+  }
+
   /// Loads the user's connections from the backend and populates the store.
   /// Safe to call multiple times — skips entries already present by ID.
   Future<void> loadConnections() async {
