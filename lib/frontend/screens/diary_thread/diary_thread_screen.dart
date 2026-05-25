@@ -41,6 +41,8 @@ class _Entry {
   final bool listened;
   final String path;
   final bool isExpired;
+  final bool isPending;
+  final bool isFailed;
 
   const _Entry({
     required this.id,
@@ -58,6 +60,8 @@ class _Entry {
     // ignore: unused_element_parameter
     this.path = '',
     this.isExpired = false,
+    this.isPending = false,
+    this.isFailed = false,
   });
 }
 
@@ -145,6 +149,8 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         listened: e.listenedAt != null,
         path: e.path,
         isExpired: e.isExpired,
+        isPending: e.isPending,
+        isFailed: e.isFailed,
       );
     }).toList();
   }
@@ -345,6 +351,11 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   // ── Playback ────────────────────────────────────────────────────────────
 
   Future<void> _togglePlay(int idx) async {
+    // Pending/failed entries are not playable.
+    if (idx < _entries.length &&
+        (_entries[idx].isPending || _entries[idx].isFailed)) {
+      return;
+    }
     HapticFeedback.selectionClick();
 
     // Tap the playing entry → pause and reset.
@@ -665,9 +676,15 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                                       ]..removeWhere((e) => e.id == removedId);
                                     });
                                   },
+                                  onRetry: () =>
+                                      SendQueueStore.instance.processQueue(),
                                 )
                               else if (_entries[i].type == _EntryType.video)
-                                _VideoBubble(entry: _entries[i]),
+                                _VideoBubble(
+                                  entry: _entries[i],
+                                  onRetry: () =>
+                                      SendQueueStore.instance.processQueue(),
+                                ),
                           ],
                         ),
                 ),
@@ -1308,6 +1325,7 @@ class _VoiceBubble extends StatefulWidget {
   final VoidCallback onTap;
   final void Function(String msg) onShowBanner;
   final VoidCallback? onDelete;
+  final VoidCallback? onRetry;
 
   const _VoiceBubble({
     required this.entry,
@@ -1322,6 +1340,7 @@ class _VoiceBubble extends StatefulWidget {
     required this.onTap,
     required this.onShowBanner,
     this.onDelete,
+    this.onRetry,
   });
 
   @override
@@ -1354,8 +1373,12 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: GestureDetector(
-          onTap: widget.onTap,
-          onLongPress: () => _openContextMenu(context),
+          onTap: widget.entry.isPending ? null
+              : widget.entry.isFailed ? widget.onRetry
+              : widget.onTap,
+          onLongPress: (widget.entry.isPending || widget.entry.isFailed)
+              ? null
+              : () => _openContextMenu(context),
           child: ListenableBuilder(
             listenable: DiaryStore.instance,
             builder: (_, _) {
@@ -1457,6 +1480,8 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                                     () => _transcriptExpanded =
                                         !_transcriptExpanded,
                                   ),
+                                  isPending: widget.entry.isPending,
+                                  isFailed: widget.entry.isFailed,
                                 ),
                         ),
                       ],
@@ -1490,6 +1515,8 @@ class _BubbleBody extends StatelessWidget {
   final VoidCallback onToggleSpeed;
   final bool transcriptExpanded;
   final VoidCallback onToggleTranscript;
+  final bool isPending;
+  final bool isFailed;
 
   const _BubbleBody({
     super.key,
@@ -1501,6 +1528,8 @@ class _BubbleBody extends StatelessWidget {
     required this.onToggleSpeed,
     required this.transcriptExpanded,
     required this.onToggleTranscript,
+    this.isPending = false,
+    this.isFailed = false,
   });
 
   @override
@@ -1540,33 +1569,57 @@ class _BubbleBody extends StatelessWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Play button
-                    AnimatedContainer(
-                      duration: AppMotion.fast,
-                      width: 40, height: 40,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: playing
-                            ? AppColors.emberWarm
-                            : isMine
-                                ? AppColors.ember.withValues(alpha: 0.35)
-                                : Colors.white.withValues(alpha: 0.10),
-                        boxShadow: playing
-                            ? [BoxShadow(
-                                color: AppColors.ember.withValues(alpha: 0.5),
-                                blurRadius: 16, offset: const Offset(0, 4))]
-                            : null,
+                    // Play / pending / failed button
+                    if (isPending)
+                      SizedBox(
+                        width: 40, height: 40,
+                        child: Center(
+                          child: SizedBox(
+                            width: 22, height: 22,
+                            child: CircularProgressIndicator(
+                              color: AppColors.emberWarm.withValues(alpha: 0.65),
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                      )
+                    else if (isFailed)
+                      Container(
+                        width: 40, height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.destructive.withValues(alpha: 0.15),
+                        ),
+                        child: const Icon(Icons.refresh_rounded,
+                            size: 20, color: AppColors.destructive),
+                      )
+                    else
+                      AnimatedContainer(
+                        duration: AppMotion.fast,
+                        width: 40, height: 40,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: playing
+                              ? AppColors.emberWarm
+                              : isMine
+                                  ? AppColors.ember.withValues(alpha: 0.35)
+                                  : Colors.white.withValues(alpha: 0.10),
+                          boxShadow: playing
+                              ? [BoxShadow(
+                                  color: AppColors.ember.withValues(alpha: 0.5),
+                                  blurRadius: 16, offset: const Offset(0, 4))]
+                              : null,
+                        ),
+                        child: Icon(
+                          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          size: 22,
+                          color: playing
+                              ? Colors.white
+                              : isMine
+                                  ? AppColors.emberBright
+                                  : AppColors.textMuted,
+                        ),
                       ),
-                      child: Icon(
-                        playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                        size: 22,
-                        color: playing
-                            ? Colors.white
-                            : isMine
-                                ? AppColors.emberBright
-                                : AppColors.textMuted,
-                      ),
-                    ),
                     const SizedBox(width: 10),
                     // Waveform + progress + speed toggle
                     Expanded(
@@ -1575,8 +1628,8 @@ class _BubbleBody extends StatelessWidget {
                         children: [
                           SizedBox(
                             height: 28,
-                            child: entry.path.isEmpty
-                                // Shimmer waveform while audio loading
+                            child: (isPending || entry.path.isEmpty)
+                                // Shimmer waveform while pending/loading
                                 ? SaanjhShimmer(
                                     isLoading: true,
                                     child: Container(
@@ -1593,9 +1646,11 @@ class _BubbleBody extends StatelessWidget {
                                 Positioned.fill(
                                   child: CustomPaint(
                                     painter: _WaveformPainter(
-                                      color: (isMine
-                                              ? AppColors.emberWarm
-                                              : AppColors.textMuted)
+                                      color: (isFailed
+                                              ? AppColors.destructive
+                                              : isMine
+                                                  ? AppColors.emberWarm
+                                                  : AppColors.textMuted)
                                           .withValues(alpha: 0.4),
                                       seed: entry.id.hashCode,
                                     ),
@@ -1622,63 +1677,80 @@ class _BubbleBody extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          // Duration + speed toggle button
+                          // Duration / status + speed toggle
                           Row(
                             children: [
                               Expanded(
-                                child: AnimatedBuilder(
-                                  animation: playCtrl ??
-                                      const AlwaysStoppedAnimation(0),
-                                  builder: (_, w) {
-                                    // Use real controller duration when available
-                                    // (set from actual audio file), else fall back
-                                    // to the stub durationSeconds.
-                                    final totalSecs = playCtrl?.duration
-                                            ?.inSeconds ??
-                                        entry.durationSeconds;
-                                    final elapsed = playing && playCtrl != null
-                                        ? (playCtrl!.value * totalSecs).floor()
-                                        : 0;
-                                    final totalLabel =
-                                        '0:${totalSecs.toString().padLeft(2, '0')}';
-                                    return Text(
-                                      playing
-                                          ? '0:${elapsed.toString().padLeft(2, '0')} / $totalLabel'
-                                          : entry.duration,
+                                child: isPending
+                                    ? Text(
+                                        'Sending…',
+                                        style: AppTypography.label(
+                                          size: 11,
+                                          color: AppColors.emberWarm
+                                              .withValues(alpha: 0.65),
+                                        ),
+                                      )
+                                    : isFailed
+                                        ? Text(
+                                            '⚠ Failed · tap to retry',
+                                            style: AppTypography.label(
+                                              size: 11,
+                                              color: AppColors.destructive,
+                                            ),
+                                          )
+                                        : AnimatedBuilder(
+                                            animation: playCtrl ??
+                                                const AlwaysStoppedAnimation(0),
+                                            builder: (_, w) {
+                                              final totalSecs =
+                                                  playCtrl?.duration?.inSeconds ??
+                                                      entry.durationSeconds;
+                                              final elapsed =
+                                                  playing && playCtrl != null
+                                                      ? (playCtrl!.value * totalSecs)
+                                                          .floor()
+                                                      : 0;
+                                              final totalLabel =
+                                                  '0:${totalSecs.toString().padLeft(2, '0')}';
+                                              return Text(
+                                                playing
+                                                    ? '0:${elapsed.toString().padLeft(2, '0')} / $totalLabel'
+                                                    : entry.duration,
+                                                style: AppTypography.label(
+                                                  size: 11,
+                                                  color: isMine
+                                                      ? AppColors.emberBright
+                                                      : AppColors.textFaint,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                              ),
+                              if (!isPending && !isFailed)
+                                // Speed toggle — cycles 1×→1.5×→2×→1×
+                                GestureDetector(
+                                  onTap: onToggleSpeed,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.textFaint
+                                          .withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      // Remove trailing .0: "1.0×" → "1×"
+                                      '${speed == speed.truncate() ? speed.truncate() : speed}×',
                                       style: AppTypography.label(
-                                        size: 11,
-                                        color: isMine
+                                        size: 10,
+                                        weight: FontWeight.w700,
+                                        color: speed > 1.0
                                             ? AppColors.emberBright
                                             : AppColors.textFaint,
                                       ),
-                                    );
-                                  },
-                                ),
-                              ),
-                              // Speed toggle — cycles 1×→1.5×→2×→1×
-                              GestureDetector(
-                                onTap: onToggleSpeed,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 5, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.textFaint
-                                        .withValues(alpha: 0.08),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    // Remove trailing .0: "1.0×" → "1×"
-                                    '${speed == speed.truncate() ? speed.truncate() : speed}×',
-                                    style: AppTypography.label(
-                                      size: 10,
-                                      weight: FontWeight.w700,
-                                      color: speed > 1.0
-                                          ? AppColors.emberBright
-                                          : AppColors.textFaint,
                                     ),
                                   ),
                                 ),
-                              ),
                             ],
                           ),
                         ],
@@ -1733,40 +1805,41 @@ class _BubbleBody extends StatelessWidget {
                   );
                 }),
                 const SizedBox(height: 6),
-                ListenableBuilder(
-                  listenable: DiaryStore.instance,
-                  builder: (_, _) {
-                    final listenedLabel =
-                        DiaryStore.instance.listenedAtLabel(entry.id);
-                    return Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Text(
-                          entry.time,
-                          style: AppTypography.label(
-                              size: 10.5, color: AppColors.textFaint),
-                        ),
-                        if (isMine) ...[
-                          const SizedBox(width: 5),
-                          AnimatedSwitcher(
-                            duration: AppMotion.medium,
-                            child: listenedLabel != null
-                                ? _ListenedLabel(
-                                    time: listenedLabel,
-                                    key: const ValueKey('listened'),
-                                  )
-                                : Icon(
-                                    Icons.done_rounded,
-                                    key: const ValueKey('sent'),
-                                    size: 13,
-                                    color: AppColors.textFaint,
-                                  ),
+                if (!isPending && !isFailed)
+                  ListenableBuilder(
+                    listenable: DiaryStore.instance,
+                    builder: (_, _) {
+                      final listenedLabel =
+                          DiaryStore.instance.listenedAtLabel(entry.id);
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            entry.time,
+                            style: AppTypography.label(
+                                size: 10.5, color: AppColors.textFaint),
                           ),
+                          if (isMine) ...[
+                            const SizedBox(width: 5),
+                            AnimatedSwitcher(
+                              duration: AppMotion.medium,
+                              child: listenedLabel != null
+                                  ? _ListenedLabel(
+                                      time: listenedLabel,
+                                      key: const ValueKey('listened'),
+                                    )
+                                  : Icon(
+                                      Icons.done_rounded,
+                                      key: const ValueKey('sent'),
+                                      size: 13,
+                                      color: AppColors.textFaint,
+                                    ),
+                            ),
+                          ],
                         ],
-                      ],
-                    );
-                  },
-                ),
+                      );
+                    },
+                  ),
               ],
     );
   }
@@ -2281,7 +2354,8 @@ class _ListenedLabel extends StatelessWidget {
 
 class _VideoBubble extends StatefulWidget {
   final _Entry entry;
-  const _VideoBubble({required this.entry});
+  final VoidCallback? onRetry;
+  const _VideoBubble({required this.entry, this.onRetry});
 
   @override
   State<_VideoBubble> createState() => _VideoBubbleState();
@@ -2301,19 +2375,25 @@ class _VideoBubbleState extends State<_VideoBubble> {
           onTapDown: (_) => setState(() => _pressed = true),
           onTapUp: (_) => setState(() => _pressed = false),
           onTapCancel: () => setState(() => _pressed = false),
-          onTap: () {
-            HapticFeedback.selectionClick();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Playing video…',
-                    style: AppTypography.label(size: 13, color: Colors.white)),
-                backgroundColor: AppColors.modalSurface,
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          },
+          onTap: widget.entry.isPending
+              ? null
+              : widget.entry.isFailed
+                  ? widget.onRetry
+                  : () {
+                      HapticFeedback.selectionClick();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Playing video…',
+                              style: AppTypography.label(
+                                  size: 13, color: Colors.white)),
+                          backgroundColor: AppColors.modalSurface,
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
           child: AnimatedContainer(
             duration: AppMotion.fast,
             margin: const EdgeInsets.symmetric(vertical: 4),
@@ -2349,19 +2429,45 @@ class _VideoBubbleState extends State<_VideoBubble> {
                           ),
                         ),
                       ),
-                      AnimatedScale(
-                        scale: _pressed ? 0.88 : 1.0,
-                        duration: AppMotion.fast,
-                        child: Container(
+                      if (widget.entry.isPending)
+                        const SizedBox(
                           width: 48, height: 48,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: 0.18),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 1.5),
+                          child: Center(
+                            child: SizedBox(
+                              width: 26, height: 26,
+                              child: CircularProgressIndicator(
+                                color: Colors.white54,
+                                strokeWidth: 2.5,
+                              ),
+                            ),
                           ),
-                          child: const Icon(Icons.play_arrow_rounded, size: 26, color: Colors.white),
+                        )
+                      else
+                        AnimatedScale(
+                          scale: _pressed ? 0.88 : 1.0,
+                          duration: AppMotion.fast,
+                          child: Container(
+                            width: 48, height: 48,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: widget.entry.isFailed
+                                  ? AppColors.destructive.withValues(alpha: 0.35)
+                                  : Colors.white.withValues(alpha: 0.18),
+                              border: Border.all(
+                                  color: widget.entry.isFailed
+                                      ? AppColors.destructive.withValues(alpha: 0.7)
+                                      : Colors.white.withValues(alpha: 0.4),
+                                  width: 1.5),
+                            ),
+                            child: Icon(
+                              widget.entry.isFailed
+                                  ? Icons.refresh_rounded
+                                  : Icons.play_arrow_rounded,
+                              size: 26,
+                              color: Colors.white,
+                            ),
+                          ),
                         ),
-                      ),
                       Positioned(
                         bottom: 8, left: 10,
                         child: Container(
@@ -2399,17 +2505,33 @@ class _VideoBubbleState extends State<_VideoBubble> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            Text(widget.entry.time,
-                                style: AppTypography.caption(size: 10.5, color: AppColors.textFaint)),
-                            if (isMine) ...[
-                              const SizedBox(width: 4),
-                              Icon(
-                                widget.entry.listened ? Icons.done_all_rounded : Icons.done_rounded,
-                                size: 13,
-                                color: widget.entry.listened
-                                    ? AppColors.violet
-                                    : AppColors.textFaint,
-                              ),
+                            if (widget.entry.isPending)
+                              Text('Sending…',
+                                  style: AppTypography.caption(
+                                      size: 10.5,
+                                      color: AppColors.emberWarm
+                                          .withValues(alpha: 0.65)))
+                            else if (widget.entry.isFailed)
+                              Text('⚠ Failed · tap to retry',
+                                  style: AppTypography.caption(
+                                      size: 10.5,
+                                      color: AppColors.destructive))
+                            else ...[
+                              Text(widget.entry.time,
+                                  style: AppTypography.caption(
+                                      size: 10.5, color: AppColors.textFaint)),
+                              if (isMine) ...[
+                                const SizedBox(width: 4),
+                                Icon(
+                                  widget.entry.listened
+                                      ? Icons.done_all_rounded
+                                      : Icons.done_rounded,
+                                  size: 13,
+                                  color: widget.entry.listened
+                                      ? AppColors.violet
+                                      : AppColors.textFaint,
+                                ),
+                              ],
                             ],
                           ],
                         ),

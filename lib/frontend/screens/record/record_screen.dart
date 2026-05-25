@@ -91,6 +91,7 @@ class _RecordScreenState extends State<RecordScreen>
   final AudioRecorder _audioRecorder = AudioRecorder();
   String? _audioPath;
   bool _isSending = false;
+  double? _uploadProgress; // 0.0–1.0 while uploading, null otherwise
 
   @override
   void initState() {
@@ -308,7 +309,9 @@ class _RecordScreenState extends State<RecordScreen>
     final sendTime = DateTime.now();
     final entryType  = _mode == _Mode.voice ? 'voice' : 'video';
     final fileExt    = _mode == _Mode.voice ? 'm4a' : 'mp4';
-    final contentType = _mode == _Mode.voice ? 'audio/m4a' : 'video/mp4';
+    // audio/mp4 is the correct MIME type for .m4a (AAC in MPEG-4 container).
+    // audio/m4a is non-standard and Supabase may reject or misclassify it.
+    final contentType = _mode == _Mode.voice ? 'audio/mp4' : 'video/mp4';
 
     // Determine all target diary IDs (broadcast list OR single target).
     final targets = (widget.broadcastTo?.isNotEmpty == true)
@@ -382,7 +385,14 @@ class _RecordScreenState extends State<RecordScreen>
               uploadUrl:   uploadResult.uploadUrl,
               bytes:       bytes,
               contentType: contentType,
+              onProgress: (sent, total) {
+                if (mounted && total > 0) {
+                  setState(() => _uploadProgress = sent / total);
+                }
+              },
             );
+
+            if (mounted) setState(() => _uploadProgress = null);
 
             await EntriesApi.instance.createEntry(
               connectionId:    id,
@@ -399,29 +409,27 @@ class _RecordScreenState extends State<RecordScreen>
               if (t != null) store.updateEntryTranscript(uploadResult.entryId, t);
             });
           } catch (e) {
-            if (_isConnectivityError(e)) {
-              hasConnectivityFailure = true;
-              // Queue for retry — file will be copied to persistent storage.
-              await SendQueueStore.instance.enqueue(
-                pendingLocalId:  localId,
-                diaryId:         id,
-                sourcePath:      filePath,
-                entryType:       entryType,
-                fileExt:         fileExt,
-                contentType:     contentType,
-                durationSeconds: effectiveDuration,
-                recordedAt:      sendTime,
-                prompt:          widget.prompt,
-                occasionTag:     widget.occasionTag,
-                parentEntryId:   widget.parentEntryId,
-              );
-            } else {
-              store.markUploadFailed(localId);
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(_uploadErrorMessage(e))),
-              );
-            }
+            debugPrint('[upload] ${e.runtimeType}: $e');
+            if (mounted) setState(() => _uploadProgress = null);
+            hasConnectivityFailure = true;
+            // Queue for retry regardless of error type:
+            // - Connectivity errors (no internet, timeout) → auto-retried on reconnect
+            // - Unknown/SSL errors → retried; permanent failures stay visible with retry btn
+            // - Server errors → retried; user can also tap retry manually
+            store.markUploadFailed(localId);
+            await SendQueueStore.instance.enqueue(
+              pendingLocalId:  localId,
+              diaryId:         id,
+              sourcePath:      filePath,
+              entryType:       entryType,
+              fileExt:         fileExt,
+              contentType:     contentType,
+              durationSeconds: effectiveDuration,
+              recordedAt:      sendTime,
+              prompt:          widget.prompt,
+              occasionTag:     widget.occasionTag,
+              parentEntryId:   widget.parentEntryId,
+            );
           }
         }
       } catch (e) {
@@ -506,37 +514,34 @@ class _RecordScreenState extends State<RecordScreen>
     context.pop();
   }
 
-  bool _isConnectivityError(Object e) {
-    if (e is DioException) {
-      return e.type == DioExceptionType.connectionError ||
-          e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout;
-    }
-    return false;
-  }
-
   String _uploadErrorMessage(Object e) {
     if (e is DioException) {
       switch (e.type) {
         case DioExceptionType.connectionTimeout:
         case DioExceptionType.sendTimeout:
-          return 'Upload timed out. Check your internet connection and try again.';
+        case DioExceptionType.receiveTimeout:
+          return 'Upload timed out. Will retry when connection improves.';
         case DioExceptionType.connectionError:
-          return 'No internet connection. Please try again.';
+          return 'No internet connection. Will send when you\'re back online.';
+        case DioExceptionType.unknown:
+          if (e.error is SocketException) {
+            return 'No internet connection. Will send when you\'re back online.';
+          }
+          return 'Connection error. Will retry automatically.';
         case DioExceptionType.badResponse:
           final code = e.response?.statusCode;
           if (code == 401 || code == 403) {
             return 'Session expired. Please restart the app and try again.';
           }
           if (code != null && code >= 500) {
-            return 'Server error ($code). Please try again in a moment.';
+            return 'Server error ($code). Will retry automatically.';
           }
-          return 'Upload failed (error $code). Please try again.';
+          return 'Upload failed (error $code). Will retry automatically.';
         default:
           break;
       }
     }
-    return 'Failed to send. Please check your connection and try again.';
+    return 'Send failed. Will retry when connection is available.';
   }
 
   // Returns the display name of the primary recipient.
@@ -628,6 +633,7 @@ class _RecordScreenState extends State<RecordScreen>
                   occasionTag: widget.occasionTag,
                   isPrivateReflection: widget.isPrivateReflection,
                   isSending: _isSending,
+                  uploadProgress: _uploadProgress,
                 ),
                 const SizedBox(height: 32),
               ],
@@ -913,6 +919,7 @@ class _BottomControls extends StatelessWidget {
   final String? occasionTag;
   final bool isPrivateReflection;
   final bool isSending;
+  final double? uploadProgress;
 
   const _BottomControls({
     required this.mode,
@@ -931,6 +938,7 @@ class _BottomControls extends StatelessWidget {
     this.occasionTag,
     this.isPrivateReflection = false,
     this.isSending = false,
+    this.uploadProgress,
   });
 
   @override
@@ -950,6 +958,19 @@ class _BottomControls extends StatelessWidget {
               onPressed: isSending ? null : onSend,
               loading: isSending,
             ),
+            if (isSending && uploadProgress != null) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: uploadProgress,
+                  backgroundColor: Colors.white.withValues(alpha: 0.10),
+                  valueColor:
+                      const AlwaysStoppedAnimation(AppColors.emberWarm),
+                  minHeight: 3,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             TextButton(
               onPressed: onDiscard,
