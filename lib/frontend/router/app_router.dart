@@ -261,8 +261,12 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.flicker,
         name: 'flicker',
-        pageBuilder: (_, s) =>
-            const MaterialPage(child: FlickerScreen()),
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return MaterialPage(child: FlickerScreen(
+            targetDiaryId: extra['targetDiaryId'] as String?,
+          ));
+        },
       ),
       GoRoute(
         path: AppRoutes.streakMilestone,
