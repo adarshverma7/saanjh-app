@@ -43,17 +43,24 @@ class EntriesApi {
     // Stream-based upload triggers chunked transfer encoding (no Content-Length),
     // which Supabase rejects. Sending Uint8List directly lets Dio set Content-Length.
     final storageDio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 20),
-      sendTimeout: const Duration(seconds: 120),
-      receiveTimeout: const Duration(seconds: 30),
+      connectTimeout: const Duration(seconds: 30),
+      // 5 min: a 20s video at high quality on slow connections can be 30-50 MB.
+      sendTimeout: const Duration(seconds: 300),
+      // 60 s: Supabase processes and responds after the upload stream closes.
+      receiveTimeout: const Duration(seconds: 60),
+      followRedirects: true,
+      maxRedirects: 3,
     ));
     await storageDio.put(
       uploadUrl,
       data: bytes,
       options: Options(
-        headers: {'Content-Type': contentType},
-        // Prevent Dio from overriding the content-type we set.
         contentType: contentType,
+        headers: {
+          // Allow overwrite on retry — Supabase rejects a second PUT to the
+          // same key without this flag (returns 400 "already exists").
+          'x-upsert': 'true',
+        },
       ),
       onSendProgress: onProgress,
     );
