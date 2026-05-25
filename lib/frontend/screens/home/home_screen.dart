@@ -1,15 +1,19 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'dart:io' show Platform;
 
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
 import '../../state/send_queue_store.dart';
+import '../../widgets/flicker_received_overlay.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
@@ -55,6 +59,12 @@ class _HomeScreenState extends State<HomeScreen>
   final _store = DiaryStore.instance;
   final _bannerKey = GlobalKey<NotificationBannerState>();
 
+  // Flicker polling — fetches status every 30 s while foregrounded.
+  Timer? _flickerPollTimer;
+  // Local notification plugin — for background Flicker alerts.
+  final _localNotif = FlutterLocalNotificationsPlugin();
+  bool _localNotifReady = false;
+
   @override
   void initState() {
     super.initState();
@@ -94,6 +104,12 @@ class _HomeScreenState extends State<HomeScreen>
     SendQueueStore.instance.load().then((_) => SendQueueStore.instance.processQueue());
     // Register push-notification device token; queues automatically if offline.
     _registerDeviceToken();
+    // Flicker real-time: wire callback, do initial load, start poll.
+    FlickerStore.instance.onFlickerReceived = _onFlickerReceived;
+    _initLocalNotif();
+    FlickerStore.instance
+        .loadFlickerStatus(DiaryStore.instance.diaries)
+        .then((_) => _startFlickerPollTimer());
     OnThisDayService.instance.load();
     _maybeShowOnThisDayOrMorning();
     // Schedule weekly digest notification (runs on every open, guards internally).
@@ -287,6 +303,10 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    _flickerPollTimer?.cancel();
+    if (FlickerStore.instance.onFlickerReceived == _onFlickerReceived) {
+      FlickerStore.instance.onFlickerReceived = null;
+    }
     WidgetsBinding.instance.removeObserver(this);
     NotificationService.instance.detach(DiaryStore.instance);
     DiaryStore.instance.removeListener(_onStoreChangeForWidget);
@@ -300,9 +320,83 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Retry the full queue (uploads, flickers, token reg) on every foreground.
       SendQueueStore.instance.processQueue();
+      // Immediate flicker refresh + restart poll timer.
+      FlickerStore.instance.loadFlickerStatus(DiaryStore.instance.diaries);
+      _startFlickerPollTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _flickerPollTimer?.cancel();
+      _flickerPollTimer = null;
     }
+  }
+
+  void _startFlickerPollTimer() {
+    _flickerPollTimer?.cancel();
+    _flickerPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        FlickerStore.instance.loadFlickerStatus(DiaryStore.instance.diaries);
+      }
+    });
+  }
+
+  // ── Flicker received ───────────────────────────────────────────────────────
+
+  void _onFlickerReceived(FlickerRecord record) {
+    if (!mounted) return;
+    final contact = DiaryStore.instance.diaries
+        .cast<DiaryContact?>()
+        .firstWhere((d) => d?.id == record.diaryId, orElse: () => null);
+    if (contact == null) return;
+
+    // Show the full-screen emotional overlay.
+    FlickerReceivedOverlay.show(
+      context,
+      record: record,
+      avatarColor: contact.avatarColor,
+      senderInitial: contact.initial,
+      onSendBack: () => context.push(
+        AppRoutes.flicker,
+        extra: {'targetDiaryId': record.diaryId},
+      ),
+    );
+
+    // Also fire a local notification for ambient awareness
+    // (visible as a system heads-up when the user is on another screen).
+    _showFlickerLocalNotif(record.personName, record.diaryId);
+  }
+
+  Future<void> _initLocalNotif() async {
+    if (_localNotifReady) return;
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    await _localNotif.initialize(
+      const InitializationSettings(android: android, iOS: ios),
+    );
+    _localNotifReady = true;
+  }
+
+  Future<void> _showFlickerLocalNotif(String name, String diaryId) async {
+    if (!_localNotifReady) return;
+    const android = AndroidNotificationDetails(
+      'saanjh_flicker',
+      'Flicker Notifications',
+      channelDescription: 'Real-time Flicker alerts',
+      importance: Importance.high,
+      priority: Priority.high,
+      enableVibration: false, // haptics handled by overlay
+    );
+    const ios = DarwinNotificationDetails(presentAlert: true, presentSound: false);
+    await _localNotif.show(
+      42, // fixed ID — replaces any previous flicker notif
+      '$name sent you a Flicker ✨',
+      'They\'re thinking of you right now.',
+      const NotificationDetails(android: android, iOS: ios),
+      payload: 'flicker:$diaryId',
+    );
   }
 
   /// Reads the device ID and queues a token registration with the backend.
