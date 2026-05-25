@@ -1,6 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:smart_auth/smart_auth.dart';
 
 import '../../../backend/auth_api.dart';
 import '../../router/app_routes.dart';
@@ -61,6 +62,8 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     )..forward();
+    // Suggest saved device number after entrance animation completes
+    WidgetsBinding.instance.addPostFrameCallback((_) => _requestPhoneHint());
   }
 
   @override
@@ -69,6 +72,46 @@ class _PhoneNumberScreenState extends State<PhoneNumberScreen>
     _phoneCtrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _requestPhoneHint() async {
+    final result = await SmartAuth.instance.requestPhoneNumberHint();
+    if (!mounted || !result.hasData || result.data == null) return;
+    _showPhoneSuggestionSheet(result.data!);
+  }
+
+  void _showPhoneSuggestionSheet(String e164) {
+    // Match country code — sort descending by length to avoid partial matches
+    final sorted = [..._countries]
+      ..sort((a, b) => b.code.length.compareTo(a.code.length));
+    _Country? matched;
+    String digits = '';
+    for (final c in sorted) {
+      if (e164.startsWith(c.code)) {
+        matched = c;
+        digits = e164.substring(c.code.length);
+        break;
+      }
+    }
+    // Only show if we recognised the country and digits look valid
+    if (matched == null || digits.isEmpty || digits.length < 6) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PhoneSuggestionSheet(
+        country: matched!,
+        digits: digits,
+        onUse: () {
+          Navigator.pop(context);
+          setState(() {
+            _country = matched!;
+            _phoneCtrl.text = digits;
+          });
+        },
+        onDismiss: () => Navigator.pop(context),
+      ),
+    );
   }
 
   bool get _isValid {
@@ -588,6 +631,112 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
             ),
           ),
           SizedBox(height: MediaQuery.of(context).padding.bottom + 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhoneSuggestionSheet extends StatelessWidget {
+  final _Country country;
+  final String digits;
+  final VoidCallback onUse;
+  final VoidCallback onDismiss;
+
+  const _PhoneSuggestionSheet({
+    required this.country,
+    required this.digits,
+    required this.onUse,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, MediaQuery.of(context).padding.bottom + 20),
+      decoration: const BoxDecoration(
+        color: AppColors.modalSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Color(0x1AFFFFFF), width: 1)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.20),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text('Use this number?', style: AppTypography.title(size: 20)),
+          const SizedBox(height: 6),
+          Text(
+            'We found a number saved on your device.',
+            style: AppTypography.body(size: 14, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 20),
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              onUse();
+            },
+            child: Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              decoration: BoxDecoration(
+                color: AppColors.ember.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                    color: AppColors.emberWarm.withValues(alpha: 0.30),
+                    width: 1.5),
+              ),
+              child: Row(
+                children: [
+                  Text(country.flag,
+                      style: const TextStyle(fontSize: 22)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${country.code} $digits',
+                          style: AppTypography.body(
+                              size: 18, weight: FontWeight.w600),
+                        ),
+                        Text(
+                          country.name,
+                          style: AppTypography.label(
+                              size: 12, color: AppColors.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.check_circle_outline_rounded,
+                      color: AppColors.emberWarm, size: 22),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextButton(
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              onDismiss();
+            },
+            child: Text(
+              'Enter number manually',
+              style: AppTypography.label(
+                  size: 14,
+                  color: AppColors.textMuted,
+                  weight: FontWeight.w500),
+            ),
+          ),
         ],
       ),
     );

@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:smart_auth/smart_auth.dart';
 
 import '../../../backend/auth_api.dart';
 import '../../router/app_routes.dart';
@@ -47,10 +48,12 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
       duration: const Duration(milliseconds: 1000),
     )..forward();
     _startResendTimer();
+    _startSmsListener();
   }
 
   @override
   void dispose() {
+    SmartAuth.instance.removeUserConsentApiListener();
     _entranceCtrl.dispose();
     _resendTimer?.cancel();
     for (final c in _ctrls) {
@@ -112,6 +115,23 @@ class _OtpVerifyScreenState extends State<OtpVerifyScreen>
       _ctrls[idx - 1].clear();
       setState(() {});
     }
+  }
+
+  Future<void> _startSmsListener() async {
+    final result = await SmartAuth.instance.getSmsWithUserConsentApi(
+      matcher: r'\d{6}',
+    );
+    if (!mounted || result.isCanceled || !result.hasData) return;
+    final code = result.data?.code;
+    if (code != null && code.length == 6) _fillOtp(code);
+  }
+
+  void _fillOtp(String code) {
+    for (var i = 0; i < 6; i++) {
+      _ctrls[i].text = code[i];
+    }
+    setState(() {});
+    _verify();
   }
 
   Future<void> _verify() async {
