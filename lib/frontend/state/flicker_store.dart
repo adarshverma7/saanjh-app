@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backend/flicker_api.dart';
 import 'diary_store.dart';
@@ -43,6 +44,13 @@ class FlickerStore extends ChangeNotifier {
   static final FlickerStore instance = FlickerStore._();
 
   final List<FlickerRecord> _records = [];
+
+  // Fired once per new incoming Flicker (dedup below).
+  // HomeScreen sets this to show the full-screen emotional overlay.
+  void Function(FlickerRecord record)? onFlickerReceived;
+
+  // In-memory dedup: prevents re-firing within the same app session.
+  final Set<String> _overlayFiredKeys = {};
 
   // ── Window timing ─────────────────────────────────────────────────────────
 
@@ -201,13 +209,31 @@ class FlickerStore extends ChangeNotifier {
         if (theirAt != null) {
           final dt = DateTime.tryParse(theirAt);
           if (dt != null && _isToday(dt) && !hasThemFlickeredToday(diary.id)) {
-            _records.add(FlickerRecord(
+            final record = FlickerRecord(
               diaryId: diary.id,
               personName: diary.name,
               sentAt: dt,
               isMine: false,
-            ));
+            );
+            _records.add(record);
             changed = true;
+
+            // Fire the overlay callback once per diary per day.
+            final now = DateTime.now();
+            final dateStr = '${now.year}-'
+                '${now.month.toString().padLeft(2, '0')}-'
+                '${now.day.toString().padLeft(2, '0')}';
+            final overlayKey = '${diary.id}:$dateStr';
+            if (!_overlayFiredKeys.contains(overlayKey)) {
+              final prefs = await SharedPreferences.getInstance();
+              if (!(prefs.getBool('flicker_overlay_$overlayKey') ?? false)) {
+                _overlayFiredKeys.add(overlayKey);
+                prefs.setBool('flicker_overlay_$overlayKey', true).ignore();
+                onFlickerReceived?.call(record);
+              } else {
+                _overlayFiredKeys.add(overlayKey);
+              }
+            }
           }
         }
       } catch (_) {
