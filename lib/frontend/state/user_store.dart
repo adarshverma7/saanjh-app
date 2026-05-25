@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../backend/api_client.dart';
 import '../../backend/auth_api.dart';
 import '../theme/app_colors.dart';
+import 'diary_store.dart';
 
 class UserStore extends ChangeNotifier {
   UserStore._();
@@ -102,11 +103,14 @@ class UserStore extends ChangeNotifier {
     _isOnboarded = false;
     _userId      = '';
     _name        = '';
+    _phone       = '';
+    _countryCode = '+91';
     await _saveLoggedIn(false);
     await _saveOnboarded(false);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kName);
     await ApiClient.instance.clearTokens();
+    DiaryStore.instance.reset();
     notifyListeners();
   }
 
