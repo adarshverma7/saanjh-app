@@ -1533,6 +1533,7 @@ class _TextBubbleContextSheet extends StatefulWidget {
 
 class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
   bool _savingToMoments = false;
+  bool _removingFromMoments = false;
 
   Future<void> _saveToMoments() async {
     setState(() => _savingToMoments = true);
@@ -1545,6 +1546,20 @@ class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _savingToMoments = false);
+    }
+  }
+
+  Future<void> _removeFromMoments() async {
+    setState(() => _removingFromMoments = true);
+    try {
+      await EntriesApi.instance.removeFromMoments(widget.diaryId, widget.entry.id);
+      DiaryStore.instance.markRemovedFromMoments(widget.entry.id);
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onShowBanner('Removed from Memory Tree');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _removingFromMoments = false);
     }
   }
 
@@ -1587,7 +1602,7 @@ class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
               ),
               const SizedBox(height: 20),
 
-              // Save to Moments (hidden if already saved)
+              // Save / remove from Moments
               if (!alreadySaved)
                 _SheetRow(
                   icon: Icons.auto_awesome_rounded,
@@ -1606,10 +1621,19 @@ class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
                 ),
               if (alreadySaved)
                 _SheetRow(
-                  icon: Icons.auto_awesome_rounded,
-                  iconColor: AppColors.emberWarm,
-                  label: '✓ Saved to Moments',
-                  onTap: null,
+                  icon: Icons.auto_awesome_outlined,
+                  iconColor: AppColors.textFaint,
+                  label: 'Remove from Moments',
+                  trailing: _removingFromMoments
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.8,
+                            color: AppColors.textFaint,
+                          ),
+                        )
+                      : null,
+                  onTap: _removingFromMoments ? null : _removeFromMoments,
                 ),
 
               // Copy

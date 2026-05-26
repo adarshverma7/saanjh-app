@@ -837,6 +837,15 @@ class DiaryStore extends ChangeNotifier {
 
   /// Marks a text entry as saved to Moments (Memory Tree).
   void markSavedToMoments(String entryId) {
+    _updateSavedToMoments(entryId, saved: true);
+  }
+
+  /// Removes a text entry from Moments (Memory Tree).
+  void markRemovedFromMoments(String entryId) {
+    _updateSavedToMoments(entryId, saved: false);
+  }
+
+  void _updateSavedToMoments(String entryId, {required bool saved}) {
     for (final list in _entries.values) {
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == entryId) {
@@ -857,7 +866,7 @@ class DiaryStore extends ChangeNotifier {
             parentEntryId: old.parentEntryId,
             isPending: false,
             isFailed: false,
-            savedToMoments: true,
+            savedToMoments: saved,
           );
           notifyListeners();
           return;

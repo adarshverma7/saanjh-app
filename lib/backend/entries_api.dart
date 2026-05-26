@@ -163,6 +163,14 @@ class EntriesApi {
         '/connections/$connectionId/entries/$entryId/save-to-moments');
     return res.data as Map<String, dynamic>;
   }
+
+  /// Removes a text message from the Memory Tree (Moments).
+  Future<Map<String, dynamic>> removeFromMoments(
+      String connectionId, String entryId) async {
+    final res = await _dio.delete(
+        '/connections/$connectionId/entries/$entryId/save-to-moments');
+    return res.data as Map<String, dynamic>;
+  }
 }
 
 class UploadUrlResult {
