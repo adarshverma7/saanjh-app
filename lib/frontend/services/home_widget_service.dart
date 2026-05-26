@@ -40,7 +40,7 @@ class HomeWidgetService {
   // ── Push fresh data to the home screen widget ─────────────────────────────
   Future<void> update() async {
     final diaryStore = DiaryStore.instance;
-    final pulseStore = FlickerStore.instance;
+    final flickerStore = FlickerStore.instance;
 
     // Pick the most recent (top-of-list) diary.
     final diaries = diaryStore.diaries;
@@ -51,8 +51,8 @@ class HomeWidgetService {
     final contactName = top.displayName;
     final streakDays = diaryStore.streakDays(diaryId);
 
-    // Pulse data for this diary.
-    final received = pulseStore.receivedToday(diaryId);
+    // Flicker data for this diary.
+    final received = flickerStore.receivedToday(diaryId);
     final wasHere = received != null;
     final pulseTime = received?.timeLabel ?? '';
 

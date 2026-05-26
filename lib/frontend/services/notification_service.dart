@@ -19,15 +19,15 @@ import '../widgets/notification_banner.dart';
  *    Action:  "Open diary"  →  /diary-thread?diaryId=X
  *    Rate:    max 3 per diary per day; suppress if app is foregrounded
  *
- * 2. PULSE RECEIVED  (SaanjhNotificationType.flickerReceived)
- *    Title:   "[Name] sent you a pulse 💛"
+ * 2. FLICKER RECEIVED  (SaanjhNotificationType.flickerReceived)
+ *    Title:   "[Name] flickered you 💛"
  *    Body:    "They're thinking of you."
  *    Payload: { diaryId }
  *    Action:  "Send one back"  →  /flicker?targetDiaryId=X
  *    Rate:    1 per diary per day; suppress if app foregrounded
  *
- * 3. MUTUAL PULSE  (SaanjhNotificationType.mutualFlicker)
- *    Title:   "You and [Name] pulsed each other ♥♥"
+ * 3. MUTUAL FLICKER  (SaanjhNotificationType.mutualFlicker)
+ *    Title:   "You and [Name] both flickered today ✨"
  *    Body:    "A little moment, shared."
  *    Payload: { diaryId }
  *    Action:  "Open diary"  →  /diary-thread?diaryId=X
@@ -110,7 +110,7 @@ class NotificationService {
   // ── Already-notified trackers (in-memory; reset on app restart) ───────────
 
   final Set<String> _seenEntryReceipts = {}; // entryId
-  final Set<String> _seenPulseKeys = {};      // "diaryId:YYYY-MM-DD"
+  final Set<String> _seenFlickerKeys = {};     // "diaryId:YYYY-MM-DD"
   final Set<String> _seenMilestoneKeys = {};  // "diaryId:N"
   final Set<String> _seenBreakIds = {};       // diaryId
   final Set<String> _seenReactionIds = {};    // reactionEntryId
@@ -119,7 +119,7 @@ class NotificationService {
 
   void attach({
     required DiaryStore diaryStore,
-    required FlickerStore pulseStore,
+    required FlickerStore flickerStore,
     required NotificationBannerState banner,
   }) {
     _banner = banner;
@@ -130,7 +130,7 @@ class NotificationService {
 
     // Store change listeners.
     diaryStore.addListener(() => handleStoreChange(diaryStore));
-    pulseStore.addListener(() => _checkPulseReceived(pulseStore, diaryStore));
+    flickerStore.addListener(() => _checkFlickerReceived(flickerStore, diaryStore));
   }
 
   void detach(DiaryStore diaryStore) {
@@ -205,32 +205,32 @@ class NotificationService {
     // This method is a hook for future batch-check logic.
   }
 
-  // ── 2 & 3. Pulse received / mutual pulse ─────────────────────────────────
+  // ── 2 & 3. Flicker received / mutual flicker ──────────────────────────────
 
-  void _checkPulseReceived(FlickerStore pulse, DiaryStore store) {
+  void _checkFlickerReceived(FlickerStore flicker, DiaryStore store) {
     if (!_enabled) return;
     final now = DateTime.now();
     final dateKey = '${now.year}-${now.month.toString().padLeft(2, '0')}'
         '-${now.day.toString().padLeft(2, '0')}';
 
     for (final diary in store.diaries) {
-      final received = pulse.receivedToday(diary.id);
+      final received = flicker.receivedToday(diary.id);
       if (received == null) continue;
 
-      final pulseKey = '${diary.id}:$dateKey';
-      if (_seenPulseKeys.contains(pulseKey)) continue;
-      _seenPulseKeys.add(pulseKey);
+      final flickerKey = '${diary.id}:$dateKey';
+      if (_seenFlickerKeys.contains(flickerKey)) continue;
+      _seenFlickerKeys.add(flickerKey);
 
-      final isMutual = pulse.hasMeFlickeredToday(diary.id);
+      final isMutual = flicker.hasMeFlickeredToday(diary.id);
       if (isMutual) {
         _banner?.show(
-          'You and ${diary.displayName} both pulsed today ♥♥',
+          'You and ${diary.displayName} both flickered today ✨',
           diary.id,
           SaanjhNotificationType.mutualFlicker,
         );
       } else {
         _banner?.show(
-          '${diary.displayName} sent you a pulse 💛',
+          '${diary.displayName} flickered you 💛',
           diary.id,
           SaanjhNotificationType.flickerReceived,
         );

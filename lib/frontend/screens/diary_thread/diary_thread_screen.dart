@@ -3314,7 +3314,7 @@ class _PulseButtonState extends State<_PulseButton> {
     final breathes = widget.hasPulsed && !widget.meSent && !widget.isMutual;
 
     return Semantics(
-      label: widget.meSent ? 'Pulse sent' : 'Send pulse',
+      label: widget.meSent ? 'Flicker sent' : 'Send flicker',
       button: true,
       child: GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),

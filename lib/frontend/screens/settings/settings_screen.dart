@@ -493,10 +493,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsGroup(items: [
                     _SettingsTileToggle(
                       icon: Icons.touch_app_rounded,
-                      label: 'Tap instead of hold for Pulse',
+                      label: 'Tap instead of hold for Flicker',
                       sub: _pulseTapMode
-                          ? 'One tap sends your pulse'
-                          : 'Hold 3 seconds to send pulse',
+                          ? 'One tap sends your flicker'
+                          : 'Hold 3 seconds to send flicker',
                       value: _pulseTapMode,
                       onChanged: (v) async {
                         final prefs = await SharedPreferences.getInstance();

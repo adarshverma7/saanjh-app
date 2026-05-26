@@ -154,7 +154,7 @@ class _HeroSection extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            'Voice notes, shared moments, and a daily pulse —\njust the two of you.',
+            'Voice notes, shared moments, and a daily flicker —\njust the two of you.',
             style: AppTypography.serifItalic(size: 15),
             textAlign: TextAlign.center,
           ),

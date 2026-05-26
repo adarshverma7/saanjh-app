@@ -93,7 +93,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (bannerState != null) {
         NotificationService.instance.attach(
           diaryStore: DiaryStore.instance,
-          pulseStore: FlickerStore.instance,
+          flickerStore: FlickerStore.instance,
           banner: bannerState,
         );
       }
@@ -2325,7 +2325,7 @@ class _DiaryCardState extends State<_DiaryCard>
                               if (mutual)
                                 const SaanjhMutualBadge()
                               else if (receivedNotSent)
-                                SaanjhPulsedYouBadge(
+                                SaanjhFlickeredYouBadge(
                                     timeLabel: received.timeLabel)
                               else if (justBroke)
                                 const _StartAgainBadge()

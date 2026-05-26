@@ -64,9 +64,9 @@ class SaanjhAvatar extends StatelessWidget {
         }
 
         final streakLabel = streakDays > 0 ? ' $streakDays day streak.' : '';
-        final pulseLabel = mePulsed ? ' Pulsed you today.' : '';
+        final flickerLabel = mePulsed ? ' Flickered you today.' : '';
         return Semantics(
-          label: '${contact.displayName} avatar.$streakLabel$pulseLabel',
+          label: '${contact.displayName} avatar.$streakLabel$flickerLabel',
           button: onTap != null,
           child: GestureDetector(
           onTap: onTap,
