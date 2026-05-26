@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+import '../../../backend/entries_api.dart';
 import '../../../backend/flicker_api.dart';
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
@@ -382,13 +383,46 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     try {
       final event = json.decode(rawJson) as Map<String, dynamic>;
-      if (event['type'] == 'flicker_received') {
+      final type = event['type'] as String?;
+      if (type == 'flicker_received') {
         FlickerStore.instance.handleSseFlickerReceived(
           diaryId: diaryId,
           personName: event['sender_name'] as String? ?? contactName,
           sentAt: DateTime.tryParse(event['sent_at'] as String? ?? '') ?? DateTime.now(),
         );
+      } else if (type == 'new_entry') {
+        final entryId = event['entry_id'] as String?;
+        final authorId = event['author_id'] as String?;
+        if (entryId != null && authorId != null) {
+          _onNewEntryReceived(diaryId, entryId);
+        }
       }
+    } catch (_) {}
+  }
+
+  Future<void> _onNewEntryReceived(String diaryId, String entryId) async {
+    if (!mounted) return;
+    if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) return;
+    try {
+      final item = await EntriesApi.instance.getEntry(diaryId, entryId);
+      if (!mounted) return;
+      if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) return;
+      final myUserId = UserStore.instance.userId;
+      final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
+      DiaryStore.instance.addEntry(DiaryEntry(
+        id: item['id'] as String,
+        diaryId: diaryId,
+        isMine: (item['author_id'] as String?) == myUserId,
+        type: item['entry_type'] as String? ?? 'voice',
+        path: '',
+        transcript: item['transcription'] as String?,
+        createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
+        durationSeconds: item['duration_seconds'] as int? ?? 0,
+        isExpired: item['is_expired'] as bool? ?? false,
+        listenedAt: (item['play_count'] as int? ?? 0) > 0
+            ? DateTime.fromMillisecondsSinceEpoch(0)
+            : null,
+      ));
     } catch (_) {}
   }
 
