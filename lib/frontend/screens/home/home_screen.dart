@@ -3540,11 +3540,12 @@ class _BottomNav extends StatelessWidget {
     ('Me',       Icons.person_outline_rounded,      Icons.person_rounded,        false),
   ];
 
-  static const _dockH  = 62.0;
-  static const _pillW  = 52.0;
-  static const _pillH  = 38.0;
-  static const _pillR  = 14.0;
-  static const _dockR  = 26.0;
+  static const _dockH      = 62.0;
+  static const _iconZoneH  = 44.0; // upper zone — pill lives here
+  static const _pillW      = 48.0;
+  static const _pillH      = 34.0; // icon-only height (label zone is below)
+  static const _pillR      = 12.0;
+  static const _dockR      = 26.0;
 
   @override
   Widget build(BuildContext context) {
@@ -3580,17 +3581,19 @@ class _BottomNav extends StatelessWidget {
             borderRadius: BorderRadius.circular(_dockR - 1),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final itemW   = constraints.maxWidth / _items.length;
+                final itemW    = constraints.maxWidth / _items.length;
                 final pillLeft = index * itemW + (itemW - _pillW) / 2;
+                // Pill is centred vertically inside the icon zone only.
+                const pillTop  = (_iconZoneH - _pillH) / 2; // = 5.0
 
                 return Stack(
                   children: [
-                    // ── Sliding amber pill ──────────────────────────────────
+                    // ── Sliding amber pill — icon zone only ─────────────────
                     AnimatedPositioned(
                       duration: const Duration(milliseconds: 220),
                       curve: Curves.easeOutCubic,
                       left: pillLeft,
-                      top: (_dockH - _pillH) / 2,
+                      top: pillTop,
                       width: _pillW,
                       height: _pillH,
                       child: Container(
@@ -3616,45 +3619,55 @@ class _BottomNav extends StatelessWidget {
                             child: SizedBox(
                               height: _dockH,
                               child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  AnimatedScale(
-                                    scale: active ? 1.12 : 1.0,
-                                    duration: const Duration(milliseconds: 320),
-                                    curve: Curves.easeOutBack,
-                                    child: AnimatedSwitcher(
-                                      duration: AppMotion.fast,
-                                      transitionBuilder: (child, anim) =>
-                                          ScaleTransition(
-                                            scale: anim,
-                                            child: FadeTransition(
-                                              opacity: anim,
-                                              child: child,
-                                            ),
+                                  // Icon zone — pill sits behind this area.
+                                  SizedBox(
+                                    height: _iconZoneH,
+                                    child: Center(
+                                      child: AnimatedScale(
+                                        scale: active ? 1.12 : 1.0,
+                                        duration: const Duration(milliseconds: 320),
+                                        curve: Curves.easeOutBack,
+                                        child: AnimatedSwitcher(
+                                          duration: AppMotion.fast,
+                                          transitionBuilder: (child, anim) =>
+                                              ScaleTransition(
+                                                scale: anim,
+                                                child: FadeTransition(
+                                                  opacity: anim,
+                                                  child: child,
+                                                ),
+                                              ),
+                                          child: Icon(
+                                            active ? activeIcon : icon,
+                                            key: ValueKey(active),
+                                            size: isPulse ? 22 : 20,
+                                            color: active
+                                                ? Colors.white
+                                                : AppColors.textFaint,
                                           ),
-                                      child: Icon(
-                                        active ? activeIcon : icon,
-                                        key: ValueKey(active),
-                                        size: isPulse ? 22 : 20,
-                                        color: active
-                                            ? Colors.white
-                                            : AppColors.textFaint,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 3),
-                                  AnimatedDefaultTextStyle(
-                                    duration: AppMotion.fast,
-                                    style: AppTypography.label(
-                                      size: 10,
-                                      color: active
-                                          ? Colors.white
-                                          : AppColors.textFaint,
-                                      weight: active
-                                          ? FontWeight.w600
-                                          : FontWeight.w400,
+                                  // Label zone — below the pill, completely clean.
+                                  SizedBox(
+                                    height: _dockH - _iconZoneH,
+                                    child: Center(
+                                      child: AnimatedDefaultTextStyle(
+                                        duration: AppMotion.fast,
+                                        style: AppTypography.label(
+                                          size: 10,
+                                          color: active
+                                              ? AppColors.emberWarm
+                                              : AppColors.textFaint,
+                                          weight: active
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
+                                        ),
+                                        child: Text(label),
+                                      ),
                                     ),
-                                    child: Text(label),
                                   ),
                                 ],
                               ),
