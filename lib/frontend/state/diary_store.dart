@@ -13,13 +13,14 @@ class DiaryEntry {
   final String id;
   final String diaryId;
   final bool isMine;
-  final String type; // 'voice' | 'video'
-  final String path; // local file path
+  final String type; // 'voice' | 'video' | 'text'
+  final String path; // local file path (empty for text/remote entries)
+  final String? content; // text body (only for type == 'text')
   final String? transcript;
   final String? prompt; // prompt card text if record was prompted
   final String? occasionTag; // e.g. '🪔 Diwali greeting'
   final DateTime createdAt;
-  final int durationSeconds; // 0 when unknown
+  final int durationSeconds; // 0 when unknown / text
   final bool isExpired; // true when diary_expires_at has passed (>24h)
   DateTime? listenedAt; // set when recipient plays the note
   double? moodEnergy; // 0.0–1.0, derived from amplitude analysis
@@ -27,6 +28,7 @@ class DiaryEntry {
   final String? parentEntryId; // set for reactions; null for top-level entries
   final bool isPending; // optimistic send — upload not yet confirmed
   final bool isFailed;  // upload failed but queued for retry
+  final bool savedToMoments; // text-only: user explicitly saved to Memory Tree
 
   DiaryEntry({
     required this.id,
@@ -34,6 +36,7 @@ class DiaryEntry {
     required this.isMine,
     required this.type,
     required this.path,
+    this.content,
     this.transcript,
     this.prompt,
     this.occasionTag,
@@ -46,6 +49,7 @@ class DiaryEntry {
     this.parentEntryId,
     this.isPending = false,
     this.isFailed = false,
+    this.savedToMoments = false,
   }) : reactions = reactions ?? [];
 }
 
@@ -768,6 +772,93 @@ class DiaryStore extends ChangeNotifier {
               lastTime: '',
             );
           }
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  /// Called when a queued text message finally delivers. Replaces temp ID
+  /// with the real backend entry ID.
+  void markTextSent(String pendingId, String realEntryId) {
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId]!;
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == pendingId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: realEntryId,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: '',
+            content: old.content,
+            createdAt: old.createdAt,
+            isPending: false,
+            isFailed: false,
+          );
+          final now = DateTime.now();
+          final h = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
+          final m = now.minute.toString().padLeft(2, '0');
+          final period = now.hour >= 12 ? 'PM' : 'AM';
+          updateSnippet(old.diaryId, '💬 ${old.content ?? 'Text'}', '$h:$m $period');
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  /// Called when an offline text message fails to send.
+  void markTextFailed(String pendingId) {
+    for (final diaryId in _entries.keys) {
+      final list = _entries[diaryId]!;
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == pendingId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: old.id,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: '',
+            content: old.content,
+            createdAt: old.createdAt,
+            isPending: false,
+            isFailed: true,
+          );
+          notifyListeners();
+          return;
+        }
+      }
+    }
+  }
+
+  /// Marks a text entry as saved to Moments (Memory Tree).
+  void markSavedToMoments(String entryId) {
+    for (final list in _entries.values) {
+      for (int i = 0; i < list.length; i++) {
+        if (list[i].id == entryId) {
+          final old = list[i];
+          list[i] = DiaryEntry(
+            id: old.id,
+            diaryId: old.diaryId,
+            isMine: old.isMine,
+            type: old.type,
+            path: old.path,
+            content: old.content,
+            transcript: old.transcript,
+            createdAt: old.createdAt,
+            durationSeconds: old.durationSeconds,
+            listenedAt: old.listenedAt,
+            moodEnergy: old.moodEnergy,
+            reactions: old.reactions,
+            parentEntryId: old.parentEntryId,
+            isPending: false,
+            isFailed: false,
+            savedToMoments: true,
+          );
           notifyListeners();
           return;
         }

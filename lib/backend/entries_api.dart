@@ -136,6 +136,33 @@ class EntriesApi {
   Future<void> deleteEntry(String connectionId, String entryId) async {
     await _dio.delete('/connections/$connectionId/entries/$entryId');
   }
+
+  /// Sends a text message — no upload step, content goes directly to the API.
+  Future<Map<String, dynamic>> sendTextMessage({
+    required String connectionId,
+    required String content,
+    String? mood,
+    DateTime? recordedAt,
+  }) async {
+    final res = await _dio.post(
+      '/connections/$connectionId/entries',
+      data: {
+        'entry_type': 'text',
+        'content': content,
+        if (mood != null) 'mood': mood,
+        if (recordedAt != null) 'recorded_at': recordedAt.toIso8601String(),
+      },
+    );
+    return res.data as Map<String, dynamic>;
+  }
+
+  /// Saves a text message to the Memory Tree (Moments).
+  Future<Map<String, dynamic>> saveToMoments(
+      String connectionId, String entryId) async {
+    final res = await _dio.patch(
+        '/connections/$connectionId/entries/$entryId/save-to-moments');
+    return res.data as Map<String, dynamic>;
+  }
 }
 
 class UploadUrlResult {
