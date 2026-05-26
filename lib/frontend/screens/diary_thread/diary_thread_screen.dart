@@ -126,6 +126,12 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     WidgetsBinding.instance.addObserver(this);
     _loadEntriesFromBackend();
     _startPollTimer();
+    // If entries were already in the store (cached), jump to the bottom on the
+    // first frame so the newest message is visible without the user having to scroll.
+    if (_entries.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _scrollToBottom(animate: false));
+    }
   }
 
   // ── Entry mapping ────────────────────────────────────────────────────────
@@ -133,11 +139,12 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   List<_Entry> _buildEntries() {
     final storeEntries = DiaryStore.instance.entriesFor(widget.diaryId);
     // Only top-level entries — reactions are nested inside DiaryEntry.reactions.
-    // Newest first — user lands on the latest message, scrolls down into history.
+    // Oldest first → newest last: newest message sits at the bottom of the list,
+    // exactly like WhatsApp / Telegram. New messages appear below existing ones.
     final topLevel = storeEntries
         .where((e) => e.parentEntryId == null)
         .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     return topLevel.map((e) {
       final entryType = e.type == 'video'
@@ -214,6 +221,22 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     });
   }
 
+  // Scrolls the conversation to the bottom so the newest message is visible.
+  // Uses jumpTo on initial load (no animation) and animateTo for live updates.
+  void _scrollToBottom({bool animate = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollCtrl.hasClients) return;
+      final max = _scrollCtrl.position.maxScrollExtent;
+      if (max <= 0) return;
+      if (animate) {
+        _scrollCtrl.animateTo(max,
+            duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+      } else {
+        _scrollCtrl.jumpTo(max);
+      }
+    });
+  }
+
   // Fetches only new entries from the backend and adds them to the store.
   // Skips the stale-entry cleanup done on initial load so active uploads
   // are not removed from the thread while they're in progress.
@@ -254,12 +277,16 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
       }
       if (toAdd.isNotEmpty && mounted) {
         DiaryStore.instance.bulkAddEntries(toAdd);
+        _scrollToBottom();
       }
     } catch (_) {}
   }
 
   void _onDiaryStoreChange() {
+    final prevCount = _entries.length;
     setState(() => _entries = _buildEntries());
+    // Auto-scroll to bottom when new messages arrive (sent or received).
+    if (_entries.length > prevCount) _scrollToBottom();
     // Fire "You're back" notification when the first send after a break lands.
     if (DiaryStore.instance.justResumed(widget.diaryId)) {
       final name = _contact?.displayName ?? 'them';
@@ -352,7 +379,10 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     } catch (_) {
       // Network failure — show whatever is already in the store.
     } finally {
-      if (mounted) setState(() => _isLoadingEntries = false);
+      if (mounted) {
+        setState(() => _isLoadingEntries = false);
+        _scrollToBottom(animate: false);
+      }
     }
   }
 
@@ -360,7 +390,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     if (!_scrollCtrl.hasClients) return;
     final max = _scrollCtrl.position.maxScrollExtent;
     if (max <= 0) return;
-    final fraction = (_scrollCtrl.offset / max).clamp(0.0, 1.0);
+    // Newest messages are at the BOTTOM (offset = max = 0.0 fraction = present/warm).
+    // Scrolling UP reveals older messages → fraction approaches 1.0 = past/cooler.
+    final fraction = (1.0 - _scrollCtrl.offset / max).clamp(0.0, 1.0);
     if ((fraction - _scrollFraction).abs() > 0.02) {
       setState(() => _scrollFraction = fraction);
     }
@@ -587,7 +619,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     final pendingId = 'text_${DateTime.now().millisecondsSinceEpoch}';
     final now = DateTime.now();
 
-    // Add optimistic entry immediately
+    // Add optimistic entry immediately and jump to bottom.
     DiaryStore.instance.addEntry(DiaryEntry(
       id: pendingId,
       diaryId: widget.diaryId,
@@ -599,6 +631,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
       durationSeconds: 0,
       isPending: true,
     ));
+    _scrollToBottom();
 
     try {
       final data = await EntriesApi.instance.sendTextMessage(
@@ -622,9 +655,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
 
   @override
   Widget build(BuildContext context) {
-    // _scrollFraction: 0.0 at top (newest / present), 1.0 at bottom (oldest / past).
-    // As fraction increases the background cools and the ember warmth fades —
-    // scrolling down through the list feels like travelling back through time.
+    // _scrollFraction: 0.0 at bottom (newest / present), 1.0 at top (oldest / past).
+    // As the user scrolls UP into history the fraction rises and the background
+    // cools — travelling back through time feels visually different from the present.
     final historyBg = Color.lerp(
       AppColors.ink,
       const Color(0xFF080508), // cooler, more desaturated past-tint
@@ -1625,7 +1658,7 @@ class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
                   iconColor: AppColors.textFaint,
                   label: 'Remove from Moments',
                   trailing: _removingFromMoments
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 16, height: 16,
                           child: CircularProgressIndicator(
                             strokeWidth: 1.8,
