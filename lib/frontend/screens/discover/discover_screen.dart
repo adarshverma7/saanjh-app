@@ -532,11 +532,16 @@ class _ContactsView extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (_, w) {
-        // Check by phone — backend connection IDs don't match device contact IDs.
-        // Contacts that are "connecting" stay visible with a loading spinner.
-        final available = onSaanjh
-            .where((c) => !store.hasPhone(c.phone))
-            .toList();
+        // Primary check: connection_id returned by checkContacts — reliable even
+        // when loadConnections() hasn't run yet.  Secondary: phone match for
+        // contacts added via _startDiary() in the current session before the
+        // API returns (DiaryContact.phone is empty for server-loaded contacts
+        // because the backend only stores phone hashes, not plaintext).
+        final available = onSaanjh.where((c) {
+          final cid = c.connectionId;
+          if (cid != null && cid.isNotEmpty && store.has(cid)) return false;
+          return !store.hasPhone(c.phone);
+        }).toList();
         final filteredSaanjh = _filter(available);
         final filteredInvite = _filter(toInvite);
         final allAdded = available.isEmpty && onSaanjh.isNotEmpty;
