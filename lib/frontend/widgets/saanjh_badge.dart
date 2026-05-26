@@ -91,12 +91,12 @@ class SaanjhStreakBadge extends StatelessWidget {
   }
 }
 
-// ─── Pulsed-you badge ─────────────────────────────────────────────────────────
+// ─── Flickered-you badge ──────────────────────────────────────────────────────
 
-class SaanjhPulsedYouBadge extends StatelessWidget {
+class SaanjhFlickeredYouBadge extends StatelessWidget {
   final String? timeLabel;
 
-  const SaanjhPulsedYouBadge({super.key, this.timeLabel});
+  const SaanjhFlickeredYouBadge({super.key, this.timeLabel});
 
   @override
   Widget build(BuildContext context) {

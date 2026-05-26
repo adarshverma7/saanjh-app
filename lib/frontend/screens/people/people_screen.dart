@@ -682,7 +682,7 @@ class _PersonTileState extends State<_PersonTile> {
                           if (mutual)
                             const _PeopleMutualBadge()
                           else if (receivedNotSent)
-                            _PeoplePulsedYouBadge(timeLabel: received.timeLabel)
+                            _PeopleFlickeredYouBadge(timeLabel: received.timeLabel)
                           else if (streakDays > 0)
                             _PeopleStreakBadge(
                                 days: streakDays, atRisk: atRisk)
@@ -737,9 +737,9 @@ class _PeopleStreakBadge extends StatelessWidget {
   }
 }
 
-class _PeoplePulsedYouBadge extends StatelessWidget {
+class _PeopleFlickeredYouBadge extends StatelessWidget {
   final String? timeLabel;
-  const _PeoplePulsedYouBadge({this.timeLabel});
+  const _PeopleFlickeredYouBadge({this.timeLabel});
 
   @override
   Widget build(BuildContext context) {

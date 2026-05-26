@@ -134,7 +134,10 @@ class FlickerStore extends ChangeNotifier {
     ));
     notifyListeners();
     FlickerApi.instance.sendFlicker(diaryId).then((res) {
-      if (res['is_mutual'] == true && !hasThemFlickeredToday(diaryId)) {
+      // Add partner's record if they already flickered today (any time, not just 5-min window).
+      final partnerAlreadyToday =
+          res['partner_flickered_today'] == true || res['is_mutual'] == true;
+      if (partnerAlreadyToday && !hasThemFlickeredToday(diaryId)) {
         _records.add(FlickerRecord(
           diaryId: diaryId,
           personName: personName,
@@ -165,7 +168,9 @@ class FlickerStore extends ChangeNotifier {
       final id   = diaryIds[i];
       final name = names[i];
       FlickerApi.instance.sendFlicker(id).then((res) {
-        if (res['is_mutual'] == true && !hasThemFlickeredToday(id)) {
+        final partnerAlreadyToday =
+            res['partner_flickered_today'] == true || res['is_mutual'] == true;
+        if (partnerAlreadyToday && !hasThemFlickeredToday(id)) {
           _records.add(FlickerRecord(
             diaryId: id,
             personName: name,

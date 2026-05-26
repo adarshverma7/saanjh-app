@@ -29,7 +29,7 @@ class _MorningOverlayState extends State<MorningOverlay>
   final _ps = FlickerStore.instance;
   final _ds = DiaryStore.instance;
 
-  // First contact who pulsed today (for the received pulse message).
+  // First contact who flickered today (for the received flicker message).
   ({String name, String timeLabel})? get _receivedPulse {
     for (final d in _ds.diaries) {
       final rec = _ps.receivedToday(d.id);
@@ -290,7 +290,7 @@ class _MorningOverlayState extends State<MorningOverlay>
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
-                        'You\'ve pulsed today 💛',
+                        'You\'ve flickered today 💛',
                         style: AppTypography.serifItalic(
                             size: 16, color: AppColors.textMuted),
                       ),
