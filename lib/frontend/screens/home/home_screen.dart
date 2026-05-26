@@ -1110,10 +1110,12 @@ class _DiariesTabState extends State<_DiariesTab> {
           child: DecoratedBox(
             decoration: BoxDecoration(
               gradient: RadialGradient(
-                center: const Alignment(0, -0.6),
-                radius: 0.9,
+                // Tight halo centred on the header logo mark (top-left).
+                // Fades to transparent before reaching the title text.
+                center: const Alignment(-0.88, -0.95),
+                radius: 0.42,
                 colors: [
-                  AppColors.ember.withValues(alpha: 0.08),
+                  AppColors.ember.withValues(alpha: 0.10),
                   Colors.transparent,
                 ],
               ),
@@ -2561,22 +2563,66 @@ class _TopHeader extends StatelessWidget {
     return SafeArea(
       bottom: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(22, 16, 22, 14),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
         child: Row(
           children: [
-            Expanded(
-              child: Text('Saanjh',
-                  style: AppTypography.title(
-                      size: 24, weight: FontWeight.w600)),
+            // ── Logo badge — glow contained within the 34×34 badge ───
+            const _HeaderLogo(),
+            const SizedBox(width: 10),
+            // ── App name — no background, clean typography ────────────
+            Text(
+              'Saanjh',
+              style: AppTypography.title(size: 22, weight: FontWeight.w600),
             ),
-            _HeaderBtn(
-                icon: Icons.person_search_rounded, onTap: onDiscover),
+            const Spacer(),
+            // ── Action buttons ────────────────────────────────────────
+            _HeaderBtn(icon: Icons.person_search_rounded, onTap: onDiscover),
             const SizedBox(width: 8),
             _HeaderBtn(
               icon: Icons.more_vert_rounded,
               onTap: () => _showQuickMenu(context),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Header logo badge ────────────────────────────────────────────────────────
+
+class _HeaderLogo extends StatelessWidget {
+  const _HeaderLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        gradient: AppColors.emberGradient,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          // Primary warm glow — offset downward so it doesn't bleed right into text.
+          BoxShadow(
+            color: AppColors.ember.withValues(alpha: 0.45),
+            blurRadius: 12,
+            spreadRadius: -2,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: AppColors.ember.withValues(alpha: 0.18),
+            blurRadius: 5,
+            spreadRadius: 0,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Icon(
+          Icons.wb_twilight_rounded,
+          size: 17,
+          color: Colors.white.withValues(alpha: 0.92),
         ),
       ),
     );
