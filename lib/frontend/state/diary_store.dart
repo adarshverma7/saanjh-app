@@ -1,4 +1,7 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backend/connections_api.dart';
 import '../theme/app_colors.dart';
@@ -149,13 +152,26 @@ class DiaryContact {
 
 class DiaryStore extends ChangeNotifier {
   DiaryStore._() {
-    // Simulate first-load delay so skeleton screens are visible.
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _isLoading = false;
-      notifyListeners();
+    // Load cached contacts instantly so the first paint shows real data.
+    _loadCachedContacts().then((_) {
+      if (_isLoading && _diaries.isNotEmpty) {
+        _isLoading = false;
+        notifyListeners();
+      }
+    });
+    // Safety valve: clear loading state after 5s even if offline / API hangs.
+    Future.delayed(const Duration(seconds: 5), () {
+      if (_isLoading) {
+        _isLoading = false;
+        notifyListeners();
+      }
     });
   }
   static final DiaryStore instance = DiaryStore._();
+
+  // ── Cache keys ────────────────────────────────────────────────────────────
+  static const _kContactsCache = 'diary_store_contacts_v2';
+  static const _kStreakCache   = 'diary_store_streaks_v2';
 
   // ── Loading state ─────────────────────────────────────────────────────────
   bool _isLoading = true;
@@ -644,10 +660,13 @@ class DiaryStore extends ChangeNotifier {
     _milestoneReached.clear();
     _isLoading = true;
     notifyListeners();
+    _clearPersistedContacts(); // wipe cache so next user starts fresh
   }
 
   /// Loads the user's connections from the backend and populates the store.
-  /// Safe to call multiple times — skips entries already present by ID.
+  /// Safe to call multiple times — skips contacts already present; refreshes
+  /// streak data for ones that are already loaded (e.g. from cache).
+  /// Always clears _isLoading when complete (success or error).
   Future<void> loadConnections() async {
     try {
       final connections = await ConnectionsApi.instance.getConnections();
@@ -656,7 +675,7 @@ class DiaryStore extends ChangeNotifier {
       for (final c in connections) {
         if ((c['status'] as String?) == 'deleted') continue;
         final id = c['id'] as String? ?? '';
-        if (id.isEmpty || has(id)) continue;
+        if (id.isEmpty) continue;
 
         final partner = c['partner'] as Map<String, dynamic>? ?? {};
         final rawName = (c['connection_name'] as String?)?.trim() ?? '';
@@ -664,6 +683,23 @@ class DiaryStore extends ChangeNotifier {
             ? rawName
             : (partner['name'] as String? ?? '').trim();
         if (name.isEmpty) continue;
+
+        final streak = c['streak_count'] as int? ?? 0;
+        final lastAt = c['last_entry_at'] as String?;
+
+        if (has(id)) {
+          // Refresh streak from server even for contacts already in store.
+          final prev = _streakDays[id] ?? 0;
+          if (streak != prev) {
+            _streakDays[id] = streak;
+            if (lastAt != null) {
+              final dt = DateTime.tryParse(lastAt);
+              if (dt != null) _lastSentDate[id] = dt;
+            }
+            changed = true;
+          }
+          continue;
+        }
 
         final initial = name[0].toUpperCase();
         final hash = name.codeUnits.fold(0, (a, b) => a + b);
@@ -678,11 +714,8 @@ class DiaryStore extends ChangeNotifier {
           avatarColor: color,
         ));
 
-        // Restore streak data from backend.
-        final streak = c['streak_count'] as int? ?? 0;
         if (streak > 0) {
           _streakDays[id] = streak;
-          final lastAt = c['last_entry_at'] as String?;
           if (lastAt != null) {
             final dt = DateTime.tryParse(lastAt);
             if (dt != null) _lastSentDate[id] = dt;
@@ -692,10 +725,107 @@ class DiaryStore extends ChangeNotifier {
         changed = true;
       }
 
-      if (changed) notifyListeners();
+      if (changed) {
+        notifyListeners();
+        _persistContacts(); // fire-and-forget; errors are caught internally
+      }
     } catch (_) {
       // Network unavailable — in-memory state remains unchanged.
+    } finally {
+      // Always clear loading — no more silent empty-state flash.
+      if (_isLoading) {
+        _isLoading = false;
+        notifyListeners();
+      }
     }
+  }
+
+  // ── Local contact cache (SharedPreferences) ───────────────────────────────
+
+  Future<void> _persistContacts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _diaries.map((d) => {
+        'id':         d.id,
+        'name':       d.name,
+        'relation':   d.relation,
+        'phone':      d.phone,
+        'initial':    d.initial,
+        'colorIndex': d.avatarColorIndex,
+        'customLabel': d.customLabel,
+      }).toList();
+      await prefs.setString(_kContactsCache, jsonEncode(list));
+
+      final streaks = <String, dynamic>{};
+      for (final d in _diaries) {
+        final days = _streakDays[d.id] ?? 0;
+        if (days > 0) {
+          streaks[d.id] = {
+            'days':     days,
+            'lastSent': _lastSentDate[d.id]?.toIso8601String(),
+          };
+        }
+      }
+      await prefs.setString(_kStreakCache, jsonEncode(streaks));
+    } catch (_) {}
+  }
+
+  Future<void> _loadCachedContacts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kContactsCache);
+      if (raw == null) return;
+
+      final list = jsonDecode(raw) as List<dynamic>;
+      for (final item in list) {
+        final m = item as Map<String, dynamic>;
+        final id = m['id'] as String? ?? '';
+        if (id.isEmpty || has(id)) continue;
+        final name = m['name'] as String? ?? '';
+        if (name.isEmpty) continue;
+
+        final colorIndex = m['colorIndex'] as int? ?? -1;
+        final colorHash  = name.codeUnits.fold(0, (a, b) => a + b);
+        final color = DiaryContact.avatarPalette[
+            colorHash % DiaryContact.avatarPalette.length];
+
+        _diaries.add(DiaryContact(
+          id:             id,
+          name:           name,
+          relation:       m['relation']   as String? ?? 'Contact',
+          phone:          m['phone']      as String? ?? '',
+          initial:        m['initial']    as String? ??
+                            (name.isNotEmpty ? name[0].toUpperCase() : '?'),
+          avatarColor:    color,
+          avatarColorIndex: colorIndex,
+          customLabel:    m['customLabel'] as String? ?? '',
+        ));
+      }
+
+      final streakRaw = prefs.getString(_kStreakCache);
+      if (streakRaw != null) {
+        final streaks = jsonDecode(streakRaw) as Map<String, dynamic>;
+        for (final entry in streaks.entries) {
+          final data = entry.value as Map<String, dynamic>;
+          final days = data['days'] as int? ?? 0;
+          if (days > 0) {
+            _streakDays[entry.key] = days;
+            final lastSent = data['lastSent'] as String?;
+            if (lastSent != null) {
+              final dt = DateTime.tryParse(lastSent);
+              if (dt != null) _lastSentDate[entry.key] = dt;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _clearPersistedContacts() {
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove(_kContactsCache);
+      prefs.remove(_kStreakCache);
+    }).catchError((_) {});
   }
 
   /// Called when a queued upload finally succeeds. Replaces the pending
