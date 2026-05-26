@@ -561,12 +561,13 @@ class _HomeScreenState extends State<HomeScreen>
   void _onNavTap(int i) {
     if (_navIndex == i) return;
     HapticFeedback.selectionClick();
-    setState(() => _navIndex = i);
-    _pageCtrl.animateToPage(
-      i,
-      duration: AppMotion.page,
-      curve: Curves.easeInOutCubic,
-    );
+    // jumpToPage: instant switch with no intermediate-page traversal.
+    // Swipes still animate naturally via PageView physics.
+    setState(() {
+      _navIndex = i;
+      _pagePos = i.toDouble(); // sync TickerMode immediately
+    });
+    _pageCtrl.jumpToPage(i);
   }
 
   void _showRecordPicker(BuildContext context) {
@@ -3486,68 +3487,142 @@ class _BottomNav extends StatelessWidget {
 
   const _BottomNav({required this.index, required this.onTap});
 
+  static const _items = [
+    ('Diaries',  Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded,  false),
+    ('Flicker',  Icons.favorite_border_rounded,     Icons.favorite_rounded,      true),
+    ('Memories', Icons.auto_awesome_outlined,       Icons.auto_awesome_rounded,  false),
+    ('Me',       Icons.person_outline_rounded,      Icons.person_rounded,        false),
+  ];
+
+  static const _dockH  = 62.0;
+  static const _pillW  = 52.0;
+  static const _pillH  = 38.0;
+  static const _pillR  = 14.0;
+  static const _dockR  = 26.0;
+
   @override
   Widget build(BuildContext context) {
-    // (label, inactiveIcon, activeIcon, isPulseTab)
-    const items = [
-      ('Diaries',   Icons.chat_bubble_outline_rounded, Icons.chat_bubble_rounded,     false),
-      ('Flicker',   Icons.favorite_border_rounded,     Icons.favorite_rounded,         true),
-      ('Memories',  Icons.auto_awesome_outlined,       Icons.auto_awesome_rounded,     false),
-      ('Me',        Icons.person_outline_rounded,      Icons.person_rounded,           false),
-    ];
+    final safeBottom = MediaQuery.of(context).padding.bottom;
 
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(
-              color: Colors.white.withValues(alpha: 0.06), width: 1),
-        ),
-        color: AppColors.ink.withValues(alpha: 0.97),
-      ),
-      padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).padding.bottom + 4, top: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: List.generate(items.length, (i) {
-          final (label, icon, activeIcon, isPulse) = items[i];
-          final active = i == index;
-          final color = active ? AppColors.emberWarm : AppColors.textFaint;
-          return GestureDetector(
-            onTap: () => onTap(i),
-            behavior: HitTestBehavior.opaque,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                  AnimatedSwitcher(
-                    duration: AppMotion.fast,
-                    child: Icon(
-                      active ? activeIcon : icon,
-                      key: ValueKey(active),
-                      size: isPulse ? 24 : 22,
-                      color: color,
-                    ),
-                  ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    label,
-                    style: AppTypography.label(
-                      size: 10.5,
-                      color: color,
-                      weight: active ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ),
+    return Material(
+      color: Colors.transparent,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 6, 16, safeBottom + 10),
+        child: Container(
+          height: _dockH,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D0F),
+            borderRadius: BorderRadius.circular(_dockR),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.08),
+              width: 1,
             ),
-          );
-        }),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(_dockR - 1),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final itemW   = constraints.maxWidth / _items.length;
+                final pillLeft = index * itemW + (itemW - _pillW) / 2;
+
+                return Stack(
+                  children: [
+                    // ── Sliding amber pill ──────────────────────────────────
+                    AnimatedPositioned(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      left: pillLeft,
+                      top: (_dockH - _pillH) / 2,
+                      width: _pillW,
+                      height: _pillH,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: AppColors.emberGradient,
+                          borderRadius: BorderRadius.circular(_pillR),
+                          boxShadow: AppShadows.emberGlow(
+                            offset: const Offset(0, 3),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // ── Tab items ───────────────────────────────────────────
+                    Row(
+                      children: List.generate(_items.length, (i) {
+                        final (label, icon, activeIcon, isPulse) = _items[i];
+                        final active = i == index;
+                        return Expanded(
+                          child: GestureDetector(
+                            onTap: () => onTap(i),
+                            behavior: HitTestBehavior.opaque,
+                            child: SizedBox(
+                              height: _dockH,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  AnimatedScale(
+                                    scale: active ? 1.12 : 1.0,
+                                    duration: const Duration(milliseconds: 320),
+                                    curve: Curves.easeOutBack,
+                                    child: AnimatedSwitcher(
+                                      duration: AppMotion.fast,
+                                      transitionBuilder: (child, anim) =>
+                                          ScaleTransition(
+                                            scale: anim,
+                                            child: FadeTransition(
+                                              opacity: anim,
+                                              child: child,
+                                            ),
+                                          ),
+                                      child: Icon(
+                                        active ? activeIcon : icon,
+                                        key: ValueKey(active),
+                                        size: isPulse ? 22 : 20,
+                                        color: active
+                                            ? Colors.white
+                                            : AppColors.textFaint,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  AnimatedDefaultTextStyle(
+                                    duration: AppMotion.fast,
+                                    style: AppTypography.label(
+                                      size: 10,
+                                      color: active
+                                          ? Colors.white
+                                          : AppColors.textFaint,
+                                      weight: active
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
+                                    child: Text(label),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
       ),
     );
   }
