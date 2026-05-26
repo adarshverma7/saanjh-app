@@ -2991,7 +2991,7 @@ class _BottomActionBar extends StatefulWidget {
 
 class _BottomActionBarState extends State<_BottomActionBar>
     with SingleTickerProviderStateMixin {
-  bool _recordPressed = false;
+  bool _pillPressed = false;
   bool _breakBannerDismissed = false;
   bool _textMode = false;
   late final AnimationController _pulseBreath;
@@ -3140,41 +3140,74 @@ class _BottomActionBarState extends State<_BottomActionBar>
 
                           const SizedBox(width: 10),
 
-                          // ② Compose pill — tap = picker, long-press = record voice
+                          // ② Voice compose pill — tap = picker, long-press = instant voice
                           Expanded(
                             child: GestureDetector(
-                              onTap: widget.onRecord,
+                              onTapDown: (_) =>
+                                  setState(() => _pillPressed = true),
+                              onTapUp: (_) =>
+                                  setState(() => _pillPressed = false),
+                              onTapCancel: () =>
+                                  setState(() => _pillPressed = false),
+                              onTap: () {
+                                HapticFeedback.lightImpact();
+                                widget.onRecord();
+                              },
                               onLongPress: () {
                                 HapticFeedback.mediumImpact();
                                 context.push(AppRoutes.voiceRecord,
                                     extra: {'isVideo': false, 'autoStart': true});
                               },
-                              child: Container(
-                                height: 50,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.05),
-                                  borderRadius: BorderRadius.circular(25),
-                                  border: Border.all(
-                                      color: Colors.white.withValues(alpha: 0.08),
-                                      width: 1),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.mic_none_rounded,
-                                        size: 17, color: AppColors.textFaint),
-                                    const SizedBox(width: 9),
-                                    Expanded(
-                                      child: Text(
-                                        'Hold to record · Tap for more',
-                                        style: AppTypography.label(
-                                            size: 12.5,
-                                            color: AppColors.textFaint),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                              child: AnimatedScale(
+                                scale: _pillPressed ? 0.97 : 1.0,
+                                duration: AppMotion.fast,
+                                child: Container(
+                                  height: 50,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(25),
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        AppColors.ember.withValues(alpha: 0.09),
+                                        Colors.white.withValues(alpha: 0.03),
+                                      ],
+                                      begin: Alignment.centerLeft,
+                                      end: Alignment.centerRight,
                                     ),
-                                  ],
+                                    border: Border.all(
+                                      color: AppColors.emberWarm.withValues(alpha: 0.24),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.mic_none_rounded,
+                                          size: 18,
+                                          color: AppColors.emberWarm.withValues(alpha: 0.65)),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: RichText(
+                                          overflow: TextOverflow.ellipsis,
+                                          text: TextSpan(
+                                            children: [
+                                              TextSpan(
+                                                text: 'Hold to record',
+                                                style: AppTypography.label(
+                                                    size: 12.5,
+                                                    color: AppColors.textMuted),
+                                              ),
+                                              TextSpan(
+                                                text: ' · Tap for more',
+                                                style: AppTypography.label(
+                                                    size: 12.5,
+                                                    color: AppColors.textFaint),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -3189,52 +3222,13 @@ class _BottomActionBarState extends State<_BottomActionBar>
                               width: 50, height: 50,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.white.withValues(alpha: 0.07),
+                                color: Colors.white.withValues(alpha: 0.06),
                                 border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.10),
-                                    width: 1),
+                                    color: Colors.white.withValues(alpha: 0.09),
+                                    width: 1.5),
                               ),
-                              child: Icon(Icons.chat_bubble_outline_rounded,
-                                  size: 20, color: AppColors.textMuted),
-                            ),
-                          ),
-
-                          const SizedBox(width: 10),
-
-                          // ④ Record FAB (right) — tap = picker, hold = instant voice
-                          GestureDetector(
-                            onTapDown: (_) =>
-                                setState(() => _recordPressed = true),
-                            onTapUp: (_) =>
-                                setState(() => _recordPressed = false),
-                            onTapCancel: () =>
-                                setState(() => _recordPressed = false),
-                            onTap: widget.onRecord,
-                            onLongPress: () {
-                              HapticFeedback.mediumImpact();
-                              context.push(AppRoutes.voiceRecord,
-                                  extra: {'isVideo': false, 'autoStart': true});
-                            },
-                            child: AnimatedScale(
-                              scale: _recordPressed ? 0.92 : 1.0,
-                              duration: AppMotion.fast,
-                              child: Container(
-                                width: 50, height: 50,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: AppColors.emberGradient,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.ember
-                                          .withValues(alpha: 0.50),
-                                      blurRadius: 20,
-                                      offset: const Offset(0, 7),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(Icons.add_rounded,
-                                    color: Colors.white, size: 24),
-                              ),
+                              child: Icon(Icons.edit_rounded,
+                                  size: 19, color: AppColors.textMuted),
                             ),
                           ),
                         ],
