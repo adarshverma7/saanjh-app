@@ -217,23 +217,7 @@ class FlickerStore extends ChangeNotifier {
             );
             _records.add(record);
             changed = true;
-
-            // Fire the overlay callback once per diary per day.
-            final now = DateTime.now();
-            final dateStr = '${now.year}-'
-                '${now.month.toString().padLeft(2, '0')}-'
-                '${now.day.toString().padLeft(2, '0')}';
-            final overlayKey = '${diary.id}:$dateStr';
-            if (!_overlayFiredKeys.contains(overlayKey)) {
-              final prefs = await SharedPreferences.getInstance();
-              if (!(prefs.getBool('flicker_overlay_$overlayKey') ?? false)) {
-                _overlayFiredKeys.add(overlayKey);
-                prefs.setBool('flicker_overlay_$overlayKey', true).ignore();
-                onFlickerReceived?.call(record);
-              } else {
-                _overlayFiredKeys.add(overlayKey);
-              }
-            }
+            await _maybeTriggerOverlay(record);
           }
         }
       } catch (_) {
@@ -241,6 +225,44 @@ class FlickerStore extends ChangeNotifier {
       }
     }
     if (changed) notifyListeners();
+  }
+
+  /// Called by HomeScreen when an SSE `flicker_received` event arrives.
+  /// Adds the record instantly (no poll delay) and fires the overlay once.
+  Future<void> handleSseFlickerReceived({
+    required String diaryId,
+    required String personName,
+    required DateTime sentAt,
+  }) async {
+    if (!_isToday(sentAt)) return;
+    if (hasThemFlickeredToday(diaryId)) return;
+    final record = FlickerRecord(
+      diaryId: diaryId,
+      personName: personName,
+      sentAt: sentAt,
+      isMine: false,
+    );
+    _records.add(record);
+    notifyListeners();
+    await _maybeTriggerOverlay(record);
+  }
+
+  // Fires the full-screen overlay exactly once per diary per calendar day.
+  Future<void> _maybeTriggerOverlay(FlickerRecord record) async {
+    final now = DateTime.now();
+    final dateStr = '${now.year}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final overlayKey = '${record.diaryId}:$dateStr';
+    if (_overlayFiredKeys.contains(overlayKey)) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('flicker_overlay_$overlayKey') ?? false)) {
+      _overlayFiredKeys.add(overlayKey);
+      prefs.setBool('flicker_overlay_$overlayKey', true).ignore();
+      onFlickerReceived?.call(record);
+    } else {
+      _overlayFiredKeys.add(overlayKey);
+    }
   }
 
   // ── Dot opacity (dims as the pulse ages through the day) ──────────────────

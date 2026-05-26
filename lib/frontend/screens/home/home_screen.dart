@@ -1,4 +1,5 @@
 ﻿import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+import '../../../backend/flicker_api.dart';
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/diary_store.dart';
@@ -62,6 +64,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   // Flicker polling — fetches status every 30 s while foregrounded.
   Timer? _flickerPollTimer;
+  // SSE subscriptions — one per connection for instant in-app delivery.
+  final List<StreamSubscription<String>> _sseSubscriptions = [];
   // Local notification plugin — for background Flicker alerts.
   final _localNotif = FlutterLocalNotificationsPlugin();
   bool _localNotifReady = false;
@@ -100,17 +104,24 @@ class _HomeScreenState extends State<HomeScreen>
     UserStore.instance.addListener(_onUserStoreChange);
     WidgetsBinding.instance.addObserver(this);
     UserStore.instance.loadPrefs();
-    DiaryStore.instance.loadConnections();
     // Load and retry anything that was queued while offline.
     SendQueueStore.instance.load().then((_) => SendQueueStore.instance.processQueue());
     // Register push-notification device token; queues automatically if offline.
     _registerDeviceToken();
-    // Flicker real-time: wire callback, do initial load, start poll.
+    // Wire flicker callback before connections load so it's ready the moment
+    // the overlay fires.
     FlickerStore.instance.onFlickerReceived = _onFlickerReceived;
     _initLocalNotif();
-    FlickerStore.instance
-        .loadFlickerStatus(DiaryStore.instance.diaries)
-        .then((_) => _startFlickerPollTimer());
+    // Chain flicker status load AFTER connections load so diaries are populated.
+    // This ensures the overlay fires instantly on fresh launch instead of waiting
+    // for the first 30-second poll tick.
+    DiaryStore.instance.loadConnections().then((_) {
+      if (!mounted) return;
+      FlickerStore.instance
+          .loadFlickerStatus(DiaryStore.instance.diaries)
+          .then((_) { if (mounted) _startFlickerPollTimer(); });
+      _startSseStreams();
+    });
     OnThisDayService.instance.load();
     _maybeShowOnThisDayOrMorning();
     // Schedule weekly digest notification (runs on every open, guards internally).
@@ -309,6 +320,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _flickerPollTimer?.cancel();
+    _cancelSseStreams();
     if (FlickerStore.instance.onFlickerReceived == _onFlickerReceived) {
       FlickerStore.instance.onFlickerReceived = null;
     }
@@ -326,12 +338,13 @@ class _HomeScreenState extends State<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       SendQueueStore.instance.processQueue();
-      // Immediate flicker refresh + restart poll timer.
       FlickerStore.instance.loadFlickerStatus(DiaryStore.instance.diaries);
       _startFlickerPollTimer();
+      _startSseStreams(); // reconnect after backgrounding
     } else if (state == AppLifecycleState.paused) {
       _flickerPollTimer?.cancel();
       _flickerPollTimer = null;
+      _cancelSseStreams(); // release TCP connections while backgrounded
     }
   }
 
@@ -342,6 +355,41 @@ class _HomeScreenState extends State<HomeScreen>
         FlickerStore.instance.loadFlickerStatus(DiaryStore.instance.diaries);
       }
     });
+  }
+
+  // ── SSE streams (one per connection) ──────────────────────────────────────
+
+  void _startSseStreams() {
+    _cancelSseStreams();
+    for (final diary in DiaryStore.instance.diaries) {
+      final sub = FlickerApi.instance
+          .subscribeToEvents(diary.id)
+          .listen(
+            (raw) => _onSseEvent(diary.id, diary.name, raw),
+            onError: (_) {}, // stream retries internally
+            cancelOnError: false,
+          );
+      _sseSubscriptions.add(sub);
+    }
+  }
+
+  void _cancelSseStreams() {
+    for (final s in _sseSubscriptions) { s.cancel(); }
+    _sseSubscriptions.clear();
+  }
+
+  void _onSseEvent(String diaryId, String contactName, String rawJson) {
+    if (!mounted) return;
+    try {
+      final event = json.decode(rawJson) as Map<String, dynamic>;
+      if (event['type'] == 'flicker_received') {
+        FlickerStore.instance.handleSseFlickerReceived(
+          diaryId: diaryId,
+          personName: event['sender_name'] as String? ?? contactName,
+          sentAt: DateTime.tryParse(event['sent_at'] as String? ?? '') ?? DateTime.now(),
+        );
+      }
+    } catch (_) {}
   }
 
   // ── Flicker received ───────────────────────────────────────────────────────
