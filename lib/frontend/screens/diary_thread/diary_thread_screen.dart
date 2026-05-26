@@ -26,7 +26,7 @@ import '../../widgets/saanjh_shimmer.dart';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
-enum _EntryType { voice, video }
+enum _EntryType { voice, video, text }
 
 class _Entry {
   final String id;
@@ -43,6 +43,8 @@ class _Entry {
   final bool isExpired;
   final bool isPending;
   final bool isFailed;
+  final String? content;       // text entries only
+  final bool savedToMoments;  // text entries only
 
   const _Entry({
     required this.id,
@@ -62,6 +64,8 @@ class _Entry {
     this.isExpired = false,
     this.isPending = false,
     this.isFailed = false,
+    this.content,
+    this.savedToMoments = false,
   });
 }
 
@@ -106,6 +110,8 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
   // Polling timer — fetches new entries from the backend every 15 seconds.
   Timer? _pollTimer;
 
+  final _actionBarKey = GlobalKey<_BottomActionBarState>();
+
   @override
   void initState() {
     super.initState();
@@ -134,10 +140,15 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     return topLevel.map((e) {
+      final entryType = e.type == 'video'
+          ? _EntryType.video
+          : e.type == 'text'
+              ? _EntryType.text
+              : _EntryType.voice;
       return _Entry(
         id: e.id,
         isMine: e.isMine,
-        type: e.type == 'video' ? _EntryType.video : _EntryType.voice,
+        type: entryType,
         // durationSeconds defaults to 20 (max recording length) until real
         // audio playback is wired in Prompt 22.
         duration: _formatDuration(e.durationSeconds > 0 ? e.durationSeconds : 20),
@@ -151,6 +162,8 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         isExpired: e.isExpired,
         isPending: e.isPending,
         isFailed: e.isFailed,
+        content: e.content,
+        savedToMoments: e.savedToMoments,
       );
     }).toList();
   }
@@ -227,11 +240,13 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
           isMine: (item['author_id'] as String?) == myUserId,
           type: item['entry_type'] as String? ?? 'voice',
           path: '',
+          content: item['content'] as String?,
           transcript: item['transcription'] as String?,
           createdAt:
               dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
           durationSeconds: item['duration_seconds'] as int? ?? 0,
           isExpired: item['is_expired'] as bool? ?? false,
+          savedToMoments: item['saved_to_moments'] as bool? ?? false,
           listenedAt: (item['play_count'] as int? ?? 0) > 0
               ? DateTime.fromMillisecondsSinceEpoch(0)
               : null,
@@ -287,9 +302,10 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     // Remove stale pending/failed local entries not actively being retried.
     // This prevents duplicates when the screen is recreated and backend entries
     // are re-fetched alongside leftover local IDs from a previous session.
-    final queuedIds = SendQueueStore.instance.uploads
-        .map((u) => u.pendingLocalId)
-        .toSet();
+    final queuedIds = {
+      ...SendQueueStore.instance.uploads.map((u) => u.pendingLocalId),
+      ...SendQueueStore.instance.texts.map((t) => t.pendingLocalId),
+    };
     final staleIds = DiaryStore.instance
         .entriesFor(widget.diaryId)
         .where((e) => (e.isPending || e.isFailed) && !queuedIds.contains(e.id))
@@ -321,10 +337,12 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
           isMine: (item['author_id'] as String?) == myUserId,
           type: item['entry_type'] as String? ?? 'voice',
           path: '', // URL fetched lazily on play
+          content: item['content'] as String?,
           transcript: item['transcription'] as String?,
           createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
           durationSeconds: item['duration_seconds'] as int? ?? 0,
           isExpired: item['is_expired'] as bool? ?? false,
+          savedToMoments: item['saved_to_moments'] as bool? ?? false,
           listenedAt: (item['play_count'] as int? ?? 0) > 0
               ? DateTime.fromMillisecondsSinceEpoch(0)
               : null,
@@ -494,6 +512,12 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
           context.push(AppRoutes.voiceRecord,
               extra: {'isVideo': true, 'targetDiaryId': widget.diaryId});
         },
+        onText: () {
+          Navigator.pop(context);
+          Future.delayed(const Duration(milliseconds: 250), () {
+            if (mounted) _actionBarKey.currentState?.enterTextMode();
+          });
+        },
       ),
     );
   }
@@ -552,6 +576,48 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     if (!confirmed || !mounted) return;
     HapticFeedback.mediumImpact();
     context.pop();
+  }
+
+  // ── Text messaging ────────────────────────────────────────────────────────
+
+  Future<void> _sendTextMessage(String content) async {
+    if (content.trim().isEmpty) return;
+    HapticFeedback.selectionClick();
+
+    final pendingId = 'text_${DateTime.now().millisecondsSinceEpoch}';
+    final now = DateTime.now();
+
+    // Add optimistic entry immediately
+    DiaryStore.instance.addEntry(DiaryEntry(
+      id: pendingId,
+      diaryId: widget.diaryId,
+      isMine: true,
+      type: 'text',
+      path: '',
+      content: content.trim(),
+      createdAt: now,
+      durationSeconds: 0,
+      isPending: true,
+    ));
+
+    try {
+      final data = await EntriesApi.instance.sendTextMessage(
+        connectionId: widget.diaryId,
+        content: content.trim(),
+        recordedAt: now,
+      );
+      final entryId = data['id'] as String;
+      DiaryStore.instance.markTextSent(pendingId, entryId);
+    } catch (_) {
+      // Offline — queue for retry
+      await SendQueueStore.instance.enqueueText(
+        pendingLocalId: pendingId,
+        diaryId: widget.diaryId,
+        content: content.trim(),
+        recordedAt: now,
+      );
+      DiaryStore.instance.markTextFailed(pendingId);
+    }
   }
 
   @override
@@ -637,6 +703,19 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                             for (int i = 0; i < _entries.length; i++)
                               if (_entries[i].isExpired)
                                 _ExpiredBubble(entry: _entries[i])
+                              else if (_entries[i].type == _EntryType.text)
+                                _TextBubble(
+                                  entry: _entries[i],
+                                  diaryId: widget.diaryId,
+                                  onShowBanner: (msg) =>
+                                      _bannerKey.currentState?.show(
+                                        msg,
+                                        widget.diaryId,
+                                        SaanjhNotificationType.milestone,
+                                      ),
+                                  onRetry: () =>
+                                      SendQueueStore.instance.processQueue(),
+                                )
                               else if (_entries[i].type == _EntryType.voice)
                                 _VoiceBubble(
                                   entry: _entries[i],
@@ -714,9 +793,11 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
             Positioned(
               left: 0, right: 0, bottom: 0,
               child: _BottomActionBar(
+                key: _actionBarKey,
                 diaryId: widget.diaryId,
                 personName: _contact?.name ?? 'them',
                 onRecord: _showRecordPicker,
+                onSendText: _sendTextMessage,
                 onPulse: () => context.push(
                   AppRoutes.flicker,
                   extra: {'targetDiaryId': widget.diaryId},
@@ -1304,6 +1385,253 @@ class _ExpiredBubble extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Text bubble ─────────────────────────────────────────────────────────────
+
+class _TextBubble extends StatelessWidget {
+  final _Entry entry;
+  final String diaryId;
+  final void Function(String msg) onShowBanner;
+  final VoidCallback? onRetry;
+
+  const _TextBubble({
+    required this.entry,
+    required this.diaryId,
+    required this.onShowBanner,
+    this.onRetry,
+  });
+
+  void _openContextMenu(BuildContext context) {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _TextBubbleContextSheet(
+        entry: entry,
+        diaryId: diaryId,
+        onShowBanner: onShowBanner,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isMine = entry.isMine;
+    final text = entry.content ?? '';
+
+    return Align(
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
+        child: GestureDetector(
+          onTap: (entry.isPending || entry.isFailed) ? onRetry : null,
+          onLongPress: (entry.isPending || entry.isFailed)
+              ? null
+              : () => _openContextMenu(context),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+            decoration: BoxDecoration(
+              color: isMine
+                  ? AppColors.ember.withValues(alpha: 0.18)
+                  : Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(20).copyWith(
+                bottomRight: isMine
+                    ? const Radius.circular(4)
+                    : const Radius.circular(20),
+                bottomLeft: isMine
+                    ? const Radius.circular(20)
+                    : const Radius.circular(4),
+              ),
+              border: Border.all(
+                color: isMine
+                    ? AppColors.emberWarm.withValues(alpha: 0.35)
+                    : Colors.white.withValues(alpha: 0.08),
+                width: 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style: AppTypography.body(size: 15).copyWith(height: 1.45),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (entry.savedToMoments) ...[
+                      const Text('✨', style: TextStyle(fontSize: 10)),
+                      const SizedBox(width: 4),
+                    ],
+                    if (entry.isPending)
+                      Text(
+                        'Sending…',
+                        style: AppTypography.label(
+                            size: 10.5,
+                            color: AppColors.emberWarm.withValues(alpha: 0.65)),
+                      )
+                    else if (entry.isFailed)
+                      Text(
+                        '⚠ Failed · tap to retry',
+                        style: AppTypography.label(
+                            size: 10.5, color: AppColors.destructive),
+                      )
+                    else ...[
+                      Text(
+                        entry.time,
+                        style: AppTypography.label(
+                            size: 10.5, color: AppColors.textFaint),
+                      ),
+                      if (isMine) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.done_rounded,
+                          size: 13,
+                          color: AppColors.textFaint,
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Text bubble context sheet ────────────────────────────────────────────────
+
+class _TextBubbleContextSheet extends StatefulWidget {
+  final _Entry entry;
+  final String diaryId;
+  final void Function(String msg) onShowBanner;
+
+  const _TextBubbleContextSheet({
+    required this.entry,
+    required this.diaryId,
+    required this.onShowBanner,
+  });
+
+  @override
+  State<_TextBubbleContextSheet> createState() =>
+      _TextBubbleContextSheetState();
+}
+
+class _TextBubbleContextSheetState extends State<_TextBubbleContextSheet> {
+  bool _savingToMoments = false;
+
+  Future<void> _saveToMoments() async {
+    setState(() => _savingToMoments = true);
+    try {
+      await EntriesApi.instance.saveToMoments(widget.diaryId, widget.entry.id);
+      DiaryStore.instance.markSavedToMoments(widget.entry.id);
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onShowBanner('✨ Saved to Memory Tree');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _savingToMoments = false);
+    }
+  }
+
+  void _copy() {
+    if (widget.entry.content == null) return;
+    Clipboard.setData(ClipboardData(text: widget.entry.content!));
+    Navigator.pop(context);
+    widget.onShowBanner('Copied to clipboard');
+  }
+
+  void _delete() {
+    Navigator.pop(context);
+    DiaryStore.instance.removeEntry(widget.entry.id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alreadySaved = widget.entry.savedToMoments;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.modalSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Color(0x1AFFFFFF))),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Center(
+                child: Container(
+                  width: 38, height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Save to Moments (hidden if already saved)
+              if (!alreadySaved)
+                _SheetRow(
+                  icon: Icons.auto_awesome_rounded,
+                  iconColor: AppColors.emberWarm,
+                  label: 'Save to Moments ✨',
+                  trailing: _savingToMoments
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.8,
+                            color: AppColors.emberWarm,
+                          ),
+                        )
+                      : null,
+                  onTap: _savingToMoments ? null : _saveToMoments,
+                ),
+              if (alreadySaved)
+                _SheetRow(
+                  icon: Icons.auto_awesome_rounded,
+                  iconColor: AppColors.emberWarm,
+                  label: '✓ Saved to Moments',
+                  onTap: null,
+                ),
+
+              // Copy
+              _SheetRow(
+                icon: Icons.copy_rounded,
+                label: 'Copy',
+                onTap: _copy,
+              ),
+
+              // Delete (mine only)
+              if (widget.entry.isMine)
+                _SheetRow(
+                  icon: Icons.delete_outline_rounded,
+                  iconColor: AppColors.destructive,
+                  label: 'Delete',
+                  labelColor: AppColors.destructive,
+                  onTap: _delete,
+                ),
+
+              const SizedBox(height: 4),
+            ],
+          ),
         ),
       ),
     );
@@ -2589,12 +2917,14 @@ class _BottomActionBar extends StatefulWidget {
   final String personName;
   final VoidCallback onRecord;
   final VoidCallback onPulse;
+  final Future<void> Function(String) onSendText;
 
   const _BottomActionBar({
     required this.diaryId,
     required this.personName,
     required this.onRecord,
     required this.onPulse,
+    required this.onSendText,
   });
 
   @override
@@ -2605,7 +2935,10 @@ class _BottomActionBarState extends State<_BottomActionBar>
     with SingleTickerProviderStateMixin {
   bool _recordPressed = false;
   bool _breakBannerDismissed = false;
+  bool _textMode = false;
   late final AnimationController _pulseBreath;
+  final _textCtrl = TextEditingController();
+  final _textFocus = FocusNode();
 
   @override
   void initState() {
@@ -2619,7 +2952,32 @@ class _BottomActionBarState extends State<_BottomActionBar>
   @override
   void dispose() {
     _pulseBreath.dispose();
+    _textCtrl.dispose();
+    _textFocus.dispose();
     super.dispose();
+  }
+
+  // Called from parent via GlobalKey when "Text message" is chosen in sheet.
+  void enterTextMode() {
+    setState(() => _textMode = true);
+    _textFocus.requestFocus();
+  }
+
+  void _enterTextMode() => enterTextMode();
+
+  void _exitTextMode() {
+    _textCtrl.clear();
+    _textFocus.unfocus();
+    setState(() => _textMode = false);
+  }
+
+  Future<void> _submit() async {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty) return;
+    _textCtrl.clear();
+    _textFocus.unfocus();
+    setState(() => _textMode = false);
+    await widget.onSendText(text);
   }
 
   @override
@@ -2699,99 +3057,130 @@ class _BottomActionBarState extends State<_BottomActionBar>
                       color: Colors.white.withValues(alpha: 0.06), width: 1),
                 ),
               ),
-              child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        // ① Pulse button (left FAB)
-                        _PulseButton(
-                          hasPulsed: hasPulsed,
-                          isMutual: isMutual,
-                          meSent: meSent,
-                          breatheCtrl: _pulseBreath,
-                          onTap: widget.onPulse,
-                        ),
+              child: AnimatedSwitcher(
+                duration: AppMotion.medium,
+                child: _textMode
+                    ? _TextComposeRow(
+                        key: const ValueKey('text'),
+                        controller: _textCtrl,
+                        focusNode: _textFocus,
+                        onCancel: _exitTextMode,
+                        onSend: _submit,
+                      )
+                    : Row(
+                        key: const ValueKey('buttons'),
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          // ① Pulse button (left FAB)
+                          _PulseButton(
+                            hasPulsed: hasPulsed,
+                            isMutual: isMutual,
+                            meSent: meSent,
+                            breatheCtrl: _pulseBreath,
+                            onTap: widget.onPulse,
+                          ),
 
-                        const SizedBox(width: 10),
+                          const SizedBox(width: 10),
 
-                        // ② Compose pill — tap = picker, hold = record voice
-                        Expanded(
-                          child: GestureDetector(
+                          // ② Compose pill — tap = picker, long-press = record voice
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: widget.onRecord,
+                              onLongPress: () {
+                                HapticFeedback.mediumImpact();
+                                context.push(AppRoutes.voiceRecord,
+                                    extra: {'isVideo': false, 'autoStart': true});
+                              },
+                              child: Container(
+                                height: 50,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.05),
+                                  borderRadius: BorderRadius.circular(25),
+                                  border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.08),
+                                      width: 1),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.mic_none_rounded,
+                                        size: 17, color: AppColors.textFaint),
+                                    const SizedBox(width: 9),
+                                    Expanded(
+                                      child: Text(
+                                        'Hold to record · Tap for more',
+                                        style: AppTypography.label(
+                                            size: 12.5,
+                                            color: AppColors.textFaint),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          // ③ Text compose button
+                          GestureDetector(
+                            onTap: _enterTextMode,
+                            child: Container(
+                              width: 50, height: 50,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white.withValues(alpha: 0.07),
+                                border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.10),
+                                    width: 1),
+                              ),
+                              child: Icon(Icons.chat_bubble_outline_rounded,
+                                  size: 20, color: AppColors.textMuted),
+                            ),
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          // ④ Record FAB (right) — tap = picker, hold = instant voice
+                          GestureDetector(
+                            onTapDown: (_) =>
+                                setState(() => _recordPressed = true),
+                            onTapUp: (_) =>
+                                setState(() => _recordPressed = false),
+                            onTapCancel: () =>
+                                setState(() => _recordPressed = false),
                             onTap: widget.onRecord,
                             onLongPress: () {
                               HapticFeedback.mediumImpact();
                               context.push(AppRoutes.voiceRecord,
                                   extra: {'isVideo': false, 'autoStart': true});
                             },
-                            child: Container(
-                              height: 50,
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.05),
-                                borderRadius: BorderRadius.circular(25),
-                                border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.08),
-                                    width: 1),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.mic_none_rounded,
-                                      size: 17, color: AppColors.textFaint),
-                                  const SizedBox(width: 9),
-                                  Expanded(
-                                    child: Text(
-                                      'Hold to record · Tap for more',
-                                      style: AppTypography.label(
-                                          size: 12.5,
-                                          color: AppColors.textFaint),
-                                      overflow: TextOverflow.ellipsis,
+                            child: AnimatedScale(
+                              scale: _recordPressed ? 0.92 : 1.0,
+                              duration: AppMotion.fast,
+                              child: Container(
+                                width: 50, height: 50,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: AppColors.emberGradient,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.ember
+                                          .withValues(alpha: 0.50),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 7),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
+                                child: const Icon(Icons.add_rounded,
+                                    color: Colors.white, size: 24),
                               ),
                             ),
                           ),
-                        ),
-
-                  const SizedBox(width: 10),
-
-                  // ③ Record FAB (right) — tap = picker, hold = instant voice
-                  GestureDetector(
-                    onTapDown: (_) =>
-                        setState(() => _recordPressed = true),
-                    onTapUp: (_) =>
-                        setState(() => _recordPressed = false),
-                    onTapCancel: () =>
-                        setState(() => _recordPressed = false),
-                    onTap: widget.onRecord,
-                    onLongPress: () {
-                      HapticFeedback.mediumImpact();
-                      context.push(AppRoutes.voiceRecord,
-                          extra: {'isVideo': false, 'autoStart': true});
-                    },
-                    child: AnimatedScale(
-                      scale: _recordPressed ? 0.92 : 1.0,
-                      duration: AppMotion.fast,
-                      child: Container(
-                        width: 50, height: 50,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: AppColors.emberGradient,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.ember
-                                  .withValues(alpha: 0.50),
-                              blurRadius: 20,
-                              offset: const Offset(0, 7),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.add_rounded,
-                            color: Colors.white, size: 24),
+                        ],
                       ),
-                    ),
-                  ),
-                ],
               ),
             ),
           ],
@@ -2909,6 +3298,147 @@ class _PulseButtonState extends State<_PulseButton> {
         ),
       ),
       ), // close Semantics
+    );
+  }
+}
+
+// ── Text compose row ──────────────────────────────────────────────────────────
+
+class _TextComposeRow extends StatefulWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final VoidCallback onCancel;
+  final VoidCallback onSend;
+
+  const _TextComposeRow({
+    super.key,
+    required this.controller,
+    required this.focusNode,
+    required this.onCancel,
+    required this.onSend,
+  });
+
+  @override
+  State<_TextComposeRow> createState() => _TextComposeRowState();
+}
+
+class _TextComposeRowState extends State<_TextComposeRow> {
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  void _onTextChanged() {
+    final has = widget.controller.text.trim().isNotEmpty;
+    if (has != _hasText) setState(() => _hasText = has);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // Cancel button
+        GestureDetector(
+          onTap: widget.onCancel,
+          child: Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.06),
+              border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08), width: 1),
+            ),
+            child: Icon(Icons.close_rounded,
+                size: 18, color: AppColors.textFaint),
+          ),
+        ),
+        const SizedBox(width: 10),
+
+        // Text field
+        Expanded(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 120),
+            child: TextField(
+              controller: widget.controller,
+              focusNode: widget.focusNode,
+              maxLines: null,
+              maxLength: 2000,
+              keyboardType: TextInputType.multiline,
+              textCapitalization: TextCapitalization.sentences,
+              style: AppTypography.body(size: 15),
+              decoration: InputDecoration(
+                hintText: 'Say something…',
+                hintStyle: AppTypography.body(
+                    size: 15, color: AppColors.textFaint),
+                counterText: '',
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.05),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.08), width: 1),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(20),
+                  borderSide: BorderSide(
+                      color: AppColors.emberWarm.withValues(alpha: 0.40),
+                      width: 1),
+                ),
+              ),
+              onSubmitted: (_) => widget.onSend(),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+
+        // Send button
+        GestureDetector(
+          onTap: _hasText ? widget.onSend : null,
+          child: AnimatedContainer(
+            duration: AppMotion.fast,
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: _hasText ? AppColors.emberGradient : null,
+              color: _hasText ? null : Colors.white.withValues(alpha: 0.06),
+              border: _hasText
+                  ? null
+                  : Border.all(
+                      color: Colors.white.withValues(alpha: 0.08), width: 1),
+              boxShadow: _hasText
+                  ? [
+                      BoxShadow(
+                        color: AppColors.ember.withValues(alpha: 0.40),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      )
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              Icons.send_rounded,
+              size: 20,
+              color: _hasText ? Colors.white : AppColors.textFaint,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3146,11 +3676,13 @@ class _RecordSheet extends StatelessWidget {
   final String recipientName;
   final VoidCallback onVoice;
   final VoidCallback onVideo;
+  final VoidCallback onText;
 
   const _RecordSheet({
     required this.recipientName,
     required this.onVoice,
     required this.onVideo,
+    required this.onText,
   });
 
   @override
@@ -3185,6 +3717,13 @@ class _RecordSheet extends StatelessWidget {
                 icon: Icons.videocam_rounded, color: AppColors.violet,
                 title: 'Video clip', sub: 'Up to 20 seconds · saved in Memory Tree',
                 onTap: onVideo,
+              ),
+              const SizedBox(height: 10),
+              _PickerTile(
+                icon: Icons.chat_bubble_outline_rounded,
+                color: const Color(0xFF4DAFEA),
+                title: 'Text message', sub: 'Quick note · save to Moments later ✨',
+                onTap: onText,
               ),
               const SizedBox(height: 8),
             ],

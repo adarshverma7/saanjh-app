@@ -124,6 +124,36 @@ class PendingTokenReg {
   );
 }
 
+// ─── Pending text message ─────────────────────────────────────────────────────
+
+class PendingTextMessage {
+  final String pendingLocalId;
+  final String diaryId;
+  final String content;
+  final DateTime recordedAt;
+
+  PendingTextMessage({
+    required this.pendingLocalId,
+    required this.diaryId,
+    required this.content,
+    required this.recordedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'pendingLocalId': pendingLocalId,
+    'diaryId':        diaryId,
+    'content':        content,
+    'recordedAt':     recordedAt.toIso8601String(),
+  };
+
+  factory PendingTextMessage.fromJson(Map<String, dynamic> j) => PendingTextMessage(
+    pendingLocalId: j['pendingLocalId'] as String,
+    diaryId:        j['diaryId']        as String,
+    content:        j['content']        as String,
+    recordedAt:     DateTime.parse(j['recordedAt'] as String),
+  );
+}
+
 // ─── SendQueueStore ────────────────────────────────────────────────────────────
 
 class SendQueueStore extends ChangeNotifier {
@@ -133,23 +163,27 @@ class SendQueueStore extends ChangeNotifier {
   static const _kUploadKey  = 'send_queue_v1';
   static const _kFlickerKey = 'flicker_queue_v1';
   static const _kTokenKey   = 'token_queue_v1';
+  static const _kTextKey    = 'text_queue_v1';
 
-  final List<PendingUpload>   _uploads  = [];
-  final List<PendingFlicker>  _flickers = [];
-  final List<PendingTokenReg> _tokens   = [];
+  final List<PendingUpload>      _uploads  = [];
+  final List<PendingFlicker>     _flickers = [];
+  final List<PendingTokenReg>    _tokens   = [];
+  final List<PendingTextMessage> _texts    = [];
 
   bool _isProcessing = false;
 
-  List<PendingUpload>   get uploads  => List.unmodifiable(_uploads);
-  List<PendingFlicker>  get flickers => List.unmodifiable(_flickers);
-  List<PendingTokenReg> get tokens   => List.unmodifiable(_tokens);
+  List<PendingUpload>      get uploads  => List.unmodifiable(_uploads);
+  List<PendingFlicker>     get flickers => List.unmodifiable(_flickers);
+  List<PendingTokenReg>    get tokens   => List.unmodifiable(_tokens);
+  List<PendingTextMessage> get texts    => List.unmodifiable(_texts);
 
   bool get hasPending =>
-      _uploads.isNotEmpty || _flickers.isNotEmpty || _tokens.isNotEmpty;
+      _uploads.isNotEmpty || _flickers.isNotEmpty ||
+      _tokens.isNotEmpty  || _texts.isNotEmpty;
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
-  /// Load all three queues from SharedPreferences. Call once at startup.
+  /// Load all queues from SharedPreferences. Call once at startup.
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     var changed = false;
@@ -193,6 +227,18 @@ class SendQueueStore extends ChangeNotifier {
         final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
         for (final item in list) {
           _tokens.add(PendingTokenReg.fromJson(item));
+          changed = true;
+        }
+      }
+    } catch (_) {}
+
+    // Text messages
+    try {
+      final raw = prefs.getString(_kTextKey);
+      if (raw != null) {
+        final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+        for (final item in list) {
+          _texts.add(PendingTextMessage.fromJson(item));
           changed = true;
         }
       }
@@ -253,6 +299,24 @@ class SendQueueStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Queue a text message that failed to reach the backend.
+  Future<void> enqueueText({
+    required String pendingLocalId,
+    required String diaryId,
+    required String content,
+    required DateTime recordedAt,
+  }) async {
+    _texts.add(PendingTextMessage(
+      pendingLocalId: pendingLocalId,
+      diaryId:        diaryId,
+      content:        content,
+      recordedAt:     recordedAt,
+    ));
+    final prefs = await SharedPreferences.getInstance();
+    await _persistTexts(prefs);
+    notifyListeners();
+  }
+
   /// Queue a device-token registration that failed offline.
   Future<void> enqueueTokenReg({
     required String deviceId,
@@ -285,6 +349,7 @@ class SendQueueStore extends ChangeNotifier {
     await _processUploads(prefs);
     await _processFlickers(prefs);
     await _processTokenRegs(prefs);
+    await _processTexts(prefs);
 
     _isProcessing = false;
   }
@@ -376,6 +441,26 @@ class SendQueueStore extends ChangeNotifier {
     }
   }
 
+  Future<void> _processTexts(SharedPreferences prefs) async {
+    final toProcess = List<PendingTextMessage>.from(_texts);
+    for (final msg in toProcess) {
+      try {
+        final data = await EntriesApi.instance.sendTextMessage(
+          connectionId: msg.diaryId,
+          content:      msg.content,
+          recordedAt:   msg.recordedAt,
+        );
+        final entryId = data['id'] as String;
+        DiaryStore.instance.markTextSent(msg.pendingLocalId, entryId);
+        _texts.remove(msg);
+        await _persistTexts(prefs);
+        notifyListeners();
+      } catch (_) {
+        // Still offline — leave in queue.
+      }
+    }
+  }
+
   // ── Persist ───────────────────────────────────────────────────────────────
 
   Future<void> _persistUploads(SharedPreferences prefs) async {
@@ -396,6 +481,13 @@ class SendQueueStore extends ChangeNotifier {
     try {
       await prefs.setString(
         _kTokenKey, jsonEncode(_tokens.map((t) => t.toJson()).toList()));
+    } catch (_) {}
+  }
+
+  Future<void> _persistTexts(SharedPreferences prefs) async {
+    try {
+      await prefs.setString(
+        _kTextKey, jsonEncode(_texts.map((m) => m.toJson()).toList()));
     } catch (_) {}
   }
 }
