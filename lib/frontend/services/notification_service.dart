@@ -107,13 +107,47 @@ class NotificationService {
     _enabled = prefs.getBool(_kNotifPref) ?? true;
   }
 
-  // ── Already-notified trackers (in-memory; reset on app restart) ───────────
+  // ── Already-notified trackers ─────────────────────────────────────────────
+  // Entry/milestone/break sets are in-memory (re-fire is harmless on restart).
+  // Flicker keys are persisted in SharedPreferences so banners never repeat.
 
   final Set<String> _seenEntryReceipts = {}; // entryId
-  final Set<String> _seenFlickerKeys = {};     // "diaryId:YYYY-MM-DD"
+  // Flicker keys: "diaryId:YYYY-MM-DD:received" and "diaryId:YYYY-MM-DD:mutual"
+  // Persisted in SharedPreferences so reopening the app never replays them.
+  final Set<String> _seenFlickerKeys = {};
   final Set<String> _seenMilestoneKeys = {};  // "diaryId:N"
   final Set<String> _seenBreakIds = {};       // diaryId
   final Set<String> _seenReactionIds = {};    // reactionEntryId
+
+  static const _kFlickerKeys = 'ns_flicker_keys_v1';
+
+  String _todayKey() {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}'
+        '-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  // Loads today's flicker keys from SharedPreferences into the in-memory set.
+  // Fire-and-forget from attach() — completes before FlickerStore API call returns.
+  Future<void> _loadSeenFlickerKeys() async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _todayKey();
+    final stored = prefs.getStringList(_kFlickerKeys) ?? [];
+    for (final k in stored) {
+      if (k.contains(':$today:')) _seenFlickerKeys.add(k);
+    }
+  }
+
+  // Persists a newly-seen key and prunes yesterday's entries.
+  Future<void> _persistFlickerKey(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _todayKey();
+    final existing = (prefs.getStringList(_kFlickerKeys) ?? [])
+        .where((k) => k.contains(':$today:')) // drop yesterday's keys
+        .toList();
+    if (!existing.contains(key)) existing.add(key);
+    await prefs.setStringList(_kFlickerKeys, existing);
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -123,7 +157,8 @@ class NotificationService {
     required NotificationBannerState banner,
   }) {
     _banner = banner;
-    _loadPrefs(); // restore persisted enabled state
+    _loadPrefs();          // restore notification-enabled flag
+    _loadSeenFlickerKeys(); // restore today's already-shown flicker keys
 
     // Listener's receipt — set callback on DiaryStore.
     diaryStore.onListenedReceipt = _onListenedReceipt;
@@ -206,29 +241,42 @@ class NotificationService {
   }
 
   // ── 2 & 3. Flicker received / mutual flicker ──────────────────────────────
+  //
+  // Two independent keys per diary per day:
+  //   "diaryId:YYYY-MM-DD:received" — fires once when partner flickers us
+  //   "diaryId:YYYY-MM-DD:mutual"   — fires once when both have flickered
+  //
+  // Both keys are persisted in SharedPreferences so app restarts never
+  // replay an already-seen notification, and each can fire independently
+  // on the same day (e.g. received early morning, mutual in the afternoon).
 
   void _checkFlickerReceived(FlickerStore flicker, DiaryStore store) {
     if (!_enabled) return;
-    final now = DateTime.now();
-    final dateKey = '${now.year}-${now.month.toString().padLeft(2, '0')}'
-        '-${now.day.toString().padLeft(2, '0')}';
+    final dateKey = _todayKey();
 
     for (final diary in store.diaries) {
       final received = flicker.receivedToday(diary.id);
       if (received == null) continue;
 
-      final flickerKey = '${diary.id}:$dateKey';
-      if (_seenFlickerKeys.contains(flickerKey)) continue;
-      _seenFlickerKeys.add(flickerKey);
-
       final isMutual = flicker.hasMeFlickeredToday(diary.id);
+
       if (isMutual) {
+        // ── Mutual: show once per day, independent of the "received" key ──
+        final mutualKey = '${diary.id}:$dateKey:mutual';
+        if (_seenFlickerKeys.contains(mutualKey)) continue;
+        _seenFlickerKeys.add(mutualKey);
+        _persistFlickerKey(mutualKey).ignore();
         _banner?.show(
           'You and ${diary.displayName} both flickered today ✨',
           diary.id,
           SaanjhNotificationType.mutualFlicker,
         );
       } else {
+        // ── Single received: show once, before we've sent back ────────────
+        final receivedKey = '${diary.id}:$dateKey:received';
+        if (_seenFlickerKeys.contains(receivedKey)) continue;
+        _seenFlickerKeys.add(receivedKey);
+        _persistFlickerKey(receivedKey).ignore();
         _banner?.show(
           '${diary.displayName} flickered you 💛',
           diary.id,
