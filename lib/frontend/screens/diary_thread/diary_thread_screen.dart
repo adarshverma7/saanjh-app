@@ -2920,6 +2920,7 @@ class _BottomActionBar extends StatefulWidget {
   final Future<void> Function(String) onSendText;
 
   const _BottomActionBar({
+    super.key,
     required this.diaryId,
     required this.personName,
     required this.onRecord,
