@@ -316,9 +316,18 @@ class _FlickerScreenState extends State<FlickerScreen>
   bool get _anyReceived => widget.targetDiaryId != null
       ? _store.hasThemFlickeredToday(widget.targetDiaryId!)
       : _diaries.any((d) => _store.hasThemFlickeredToday(d.id));
-  bool get _anyAtRisk => widget.targetDiaryId != null
-      ? DiaryStore.instance.streakAtRisk(widget.targetDiaryId!)
-      : _diaries.any((d) => DiaryStore.instance.streakAtRisk(d.id));
+  // At-risk = final 1 hour of the day (11 PM – midnight) AND not yet sent.
+  // Deliberately NOT tied to the voice-note diary streak — that is a separate
+  // concept and would show false urgency from day 2 of a diary streak onwards.
+  bool get _anyAtRisk {
+    if (_phase == _Phase.sent) return false;
+    if (_diaries.isEmpty) return false;
+    final alreadySent = widget.targetDiaryId != null
+        ? _store.hasMeFlickeredToday(widget.targetDiaryId!)
+        : _diaries.any((d) => _store.hasMeFlickeredToday(d.id));
+    if (alreadySent) return false;
+    return _store.windowState == FlickerWindowState.lastChance;
+  }
 
   // First received pulse for today — used in windowClosed state.
   FlickerRecord? get _firstReceivedPulse {
@@ -1265,7 +1274,7 @@ class _ButtonLabel extends StatelessWidget {
         ),
       _Phase.ready => atRisk
           ? (
-              '⚠ Streak at risk — flicker before 10 PM',
+              '⚠ Last chance — flicker before midnight',
               const Color(0xFFFF8A82),
             )
           : totalCount == 0
