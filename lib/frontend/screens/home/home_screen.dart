@@ -390,6 +390,22 @@ class _HomeScreenState extends State<HomeScreen>
           personName: event['sender_name'] as String? ?? contactName,
           sentAt: DateTime.tryParse(event['sent_at'] as String? ?? '') ?? DateTime.now(),
         );
+      } else if (type == 'mutual_reveal') {
+        final mutualAt = DateTime.tryParse(event['mutual_at'] as String? ?? '') ?? DateTime.now();
+        FlickerStore.instance.handleSseMutualReveal(
+          diaryId: diaryId,
+          personName: contactName,
+          sentAt: mutualAt,
+        );
+      } else if (type == 'stream_reconnected') {
+        // SSE dropped and re-established — re-fetch this connection's authoritative
+        // state so any events missed during the outage are recovered immediately.
+        final diary = DiaryStore.instance.diaries
+            .cast<DiaryContact?>()
+            .firstWhere((d) => d?.id == diaryId, orElse: () => null);
+        if (diary != null) {
+          FlickerStore.instance.loadFlickerStatus([diary]);
+        }
       } else if (type == 'new_entry') {
         final entryId = event['entry_id'] as String?;
         final authorId = event['author_id'] as String?;
