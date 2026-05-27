@@ -8,16 +8,20 @@ import '../state/flicker_store.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_typography.dart';
 
-/// Full-screen emotional overlay shown when the recipient receives a Flicker.
+/// Full-screen emotional overlay shown when a Flicker is received or becomes mutual.
 ///
 /// Shown via [FlickerReceivedOverlay.show] from HomeScreen whenever
 /// [FlickerStore.onFlickerReceived] fires. Displays only once per Flicker
 /// per day (guarded in FlickerStore with SharedPreferences).
+///
+/// When [isMutual] is true, a green celebratory variant is shown instead of
+/// the amber "send one back" variant. Both sides of a mutual flicker see this.
 class FlickerReceivedOverlay extends StatefulWidget {
   final String senderName;
   final String senderInitial;
   final Color avatarColor;
   final VoidCallback onSendBack;
+  final bool isMutual;
 
   const FlickerReceivedOverlay({
     super.key,
@@ -25,6 +29,7 @@ class FlickerReceivedOverlay extends StatefulWidget {
     required this.senderInitial,
     required this.avatarColor,
     required this.onSendBack,
+    this.isMutual = false,
   });
 
   static Future<void> show(
@@ -45,6 +50,7 @@ class FlickerReceivedOverlay extends StatefulWidget {
         senderInitial: senderInitial,
         avatarColor: avatarColor,
         onSendBack: onSendBack,
+        isMutual: record.isMutual,
       ),
       transitionBuilder: (ctx, anim1, anim2, child) {
         final scale = Tween<double>(begin: 0.86, end: 1.0).animate(
@@ -131,21 +137,28 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
 
   @override
   Widget build(BuildContext context) {
+    final glowColor = widget.isMutual ? AppColors.successGreen : AppColors.ember;
+    final nameColor = widget.isMutual
+        ? AppColors.successGreen
+        : AppColors.emberBright;
+
     return Material(
       color: Colors.transparent,
       child: Stack(
         children: [
-          // ── Floating ember particles ──────────────────────────────────────
+          // ── Floating particles ────────────────────────────────────────────
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _emberCtrl,
               builder: (_, _) => CustomPaint(
-                painter: _FloatingEmbersPainter(t: _emberCtrl.value),
+                painter: widget.isMutual
+                    ? _FloatingHeartsPainter(t: _emberCtrl.value)
+                    : _FloatingEmbersPainter(t: _emberCtrl.value),
               ),
             ),
           ),
 
-          // ── Ambient radial warmth at centre ──────────────────────────────
+          // ── Ambient radial glow at centre ─────────────────────────────────
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _pulseCtrl,
@@ -157,7 +170,7 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                       center: const Alignment(0, -0.10),
                       radius: 0.80,
                       colors: [
-                        AppColors.ember.withValues(alpha: alpha),
+                        glowColor.withValues(alpha: alpha),
                         Colors.transparent,
                       ],
                     ),
@@ -180,6 +193,7 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                     initial: widget.senderInitial,
                     color: widget.avatarColor,
                     pulse: _pulseCtrl.value,
+                    glowColor: glowColor,
                   ),
                 ),
 
@@ -208,7 +222,7 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                                 size: 36,
                                 weight: FontWeight.w700,
                               ).copyWith(
-                                color: AppColors.emberBright,
+                                color: nameColor,
                                 fontStyle: FontStyle.italic,
                                 letterSpacing: -0.5,
                               ),
@@ -216,13 +230,14 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                             ),
                           ),
                           const SizedBox(height: 8),
-                          // "sent you a Flicker ✨"
                           Opacity(
                             opacity: bodyOpacity,
                             child: Transform.translate(
                               offset: Offset(0, bodySlide),
                               child: Text(
-                                'sent you a Flicker ✨',
+                                widget.isMutual
+                                    ? 'flickered you back! 💚'
+                                    : 'sent you a Flicker ✨',
                                 style: AppTypography.title(
                                   size: 26,
                                   weight: FontWeight.w500,
@@ -241,7 +256,9 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                             child: Transform.translate(
                               offset: Offset(0, bodySlide * 1.4),
                               child: Text(
-                                'They\'re thinking of you right now.',
+                                widget.isMutual
+                                    ? 'You\'re both thinking of each other. 💚'
+                                    : 'They\'re thinking of you right now.',
                                 style: AppTypography.serifItalic(
                                   size: 16,
                                   color: Colors.white
@@ -265,17 +282,25 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                   child: Column(
                     children: [
                       GestureDetector(
-                        onTap: _handleSendBack,
+                        onTap: widget.isMutual ? _handleDismiss : _handleSendBack,
                         child: Container(
                           width: double.infinity,
                           height: 56,
                           decoration: BoxDecoration(
-                            gradient: AppColors.emberGradient,
+                            gradient: widget.isMutual
+                                ? LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      AppColors.successGreen,
+                                      const Color(0xFF1DB954),
+                                    ],
+                                  )
+                                : AppColors.emberGradient,
                             borderRadius: BorderRadius.circular(18),
                             boxShadow: [
                               BoxShadow(
-                                color: AppColors.ember
-                                    .withValues(alpha: 0.55),
+                                color: glowColor.withValues(alpha: 0.55),
                                 blurRadius: 36,
                                 offset: const Offset(0, 14),
                               ),
@@ -283,7 +308,9 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                           ),
                           child: Center(
                             child: Text(
-                              'Send one back  💛',
+                              widget.isMutual
+                                  ? '💚  Beautiful!'
+                                  : 'Send one back  💛',
                               style: AppTypography.button(
                                 color: Colors.white,
                               ),
@@ -292,16 +319,17 @@ class _FlickerReceivedOverlayState extends State<FlickerReceivedOverlay>
                         ),
                       ),
                       const SizedBox(height: 14),
-                      TextButton(
-                        onPressed: _handleDismiss,
-                        child: Text(
-                          'Maybe later',
-                          style: AppTypography.label(
-                            size: 14,
-                            color: Colors.white.withValues(alpha: 0.30),
+                      if (!widget.isMutual)
+                        TextButton(
+                          onPressed: _handleDismiss,
+                          child: Text(
+                            'Maybe later',
+                            style: AppTypography.label(
+                              size: 14,
+                              color: Colors.white.withValues(alpha: 0.30),
+                            ),
                           ),
                         ),
-                      ),
                     ],
                   ),
                 ),
@@ -322,11 +350,13 @@ class _GlowingAvatar extends StatelessWidget {
   final String initial;
   final Color color;
   final double pulse; // 0.0 → 1.0
+  final Color glowColor;
 
   const _GlowingAvatar({
     required this.initial,
     required this.color,
     required this.pulse,
+    required this.glowColor,
   });
 
   @override
@@ -349,7 +379,7 @@ class _GlowingAvatar extends StatelessWidget {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.ember.withValues(alpha: glowAlpha),
+                  color: glowColor.withValues(alpha: glowAlpha),
                   blurRadius: 40 + pulse * 20,
                   spreadRadius: 2,
                 ),
@@ -364,7 +394,7 @@ class _GlowingAvatar extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: AppColors.emberWarm.withValues(alpha: ringAlpha * 0.5),
+                color: glowColor.withValues(alpha: ringAlpha * 0.5),
                 width: 1,
               ),
             ),
@@ -377,7 +407,7 @@ class _GlowingAvatar extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: AppColors.emberWarm.withValues(alpha: ringAlpha),
+                color: glowColor.withValues(alpha: ringAlpha),
                 width: 1.5,
               ),
             ),
@@ -492,4 +522,62 @@ class _EmberParticle {
     required this.sway,
     required this.colorIndex,
   });
+}
+
+// ─── Floating hearts/sparkles painter (mutual reveal) ────────────────────────
+
+class _FloatingHeartsPainter extends CustomPainter {
+  final double t;
+
+  _FloatingHeartsPainter({required this.t});
+
+  static final _rng = math.Random(137);
+  static final _particles = List.generate(28, (i) {
+    return _EmberParticle(
+      x:          _rng.nextDouble(),
+      phase:      _rng.nextDouble(),
+      speed:      0.18 + _rng.nextDouble() * 0.22,
+      size:       1.6 + _rng.nextDouble() * 3.8,
+      sway:       (_rng.nextDouble() - 0.5) * 0.07,
+      colorIndex: i % _colors.length,
+    );
+  });
+
+  static const _colors = [
+    Color(0xFF30D158), // successGreen
+    Color(0xFF5FE88A), // light green
+    Color(0xFF1DB954), // deep green
+    Color(0xFFAAF0C4), // pale mint
+    Color(0xFF00C97A), // teal-green
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final p in _particles) {
+      final progress = ((t * p.speed / 0.20 + p.phase) % 1.0);
+      final x = size.width * p.x +
+          math.sin(progress * 2 * math.pi * 0.7) * size.width * p.sway;
+      final y = size.height * (1.05 - progress * 1.10);
+
+      double alpha;
+      if (progress < 0.12) {
+        alpha = progress / 0.12;
+      } else if (progress > 0.72) {
+        alpha = (1.0 - progress) / 0.28;
+      } else {
+        alpha = 1.0;
+      }
+
+      canvas.drawCircle(
+        Offset(x, y),
+        p.size * (0.7 + progress * 0.3),
+        Paint()
+          ..color = _colors[p.colorIndex]
+              .withValues(alpha: (alpha * 0.65).clamp(0.0, 1.0)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FloatingHeartsPainter o) => o.t != t;
 }
