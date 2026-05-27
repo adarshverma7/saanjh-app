@@ -15,12 +15,14 @@ class FlickerRecord {
   final String personName;
   final DateTime sentAt;
   final bool isMine;
+  final bool isMutual;
 
   const FlickerRecord({
     required this.diaryId,
     required this.personName,
     required this.sentAt,
     required this.isMine,
+    this.isMutual = false,
   });
 
   String get timeLabel {
@@ -184,14 +186,16 @@ class FlickerStore extends ChangeNotifier {
   }
 
   bool _isToday(DateTime dt) {
+    final local = dt.toLocal();
     final n = DateTime.now();
-    return dt.year == n.year && dt.month == n.month && dt.day == n.day;
+    return local.year == n.year && local.month == n.month && local.day == n.day;
   }
 
   DateTime? _parseIfToday(String? raw) {
     if (raw == null) return null;
     final dt = DateTime.tryParse(raw);
-    return (dt != null && _isToday(dt)) ? dt : null;
+    if (dt == null) return null;
+    return _isToday(dt) ? dt.toLocal() : null;
   }
 
   // ── Atomic state machine ──────────────────────────────────────────────────
@@ -433,7 +437,7 @@ class FlickerStore extends ChangeNotifier {
     if (onFlickerReceived == null) return; // retry via _checkPendingOverlays
     _transition(diaryId, (cur) => cur.copyWith(mutualOverlayShown: true));
     onFlickerReceived!.call(FlickerRecord(
-      diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false,
+      diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false, isMutual: true,
     ));
   }
 
