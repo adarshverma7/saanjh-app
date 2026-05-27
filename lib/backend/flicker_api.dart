@@ -17,12 +17,16 @@ class FlickerApi {
     return res.data as Map<String, dynamic>;
   }
 
-  /// SSE event stream for real-time updates.
-  /// Uses Dio's response stream — auto-reconnects on error.
+  /// SSE event stream for real-time updates. Auto-reconnects on error.
+  ///
+  /// Emits a synthetic `{"type":"stream_reconnected"}` event on every reconnect
+  /// (not on initial connect) so FlickerStore can re-fetch authoritative state
+  /// for any events missed during the disconnect window.
   Stream<String> subscribeToEvents(String connectionId) async* {
     final token = await ApiClient.instance.accessToken;
     final url = '$kApiBaseUrl/connections/$connectionId/events';
 
+    bool hasConnected = false;
     while (true) {
       try {
         final res = await _dio.get<ResponseBody>(
@@ -37,6 +41,13 @@ class FlickerApi {
           ),
         );
 
+        // Emit reconnect sentinel after a successful re-connection.
+        // Skipped on first connect — loadFlickerStatus already runs at startup.
+        if (hasConnected) {
+          yield '{"type":"stream_reconnected"}';
+        }
+        hasConnected = true;
+
         await for (final chunk in res.data!.stream) {
           final text = String.fromCharCodes(chunk);
           for (final line in text.split('\n')) {
@@ -46,7 +57,6 @@ class FlickerApi {
           }
         }
       } catch (_) {
-        // Wait 3 seconds before reconnecting
         await Future.delayed(const Duration(seconds: 3));
       }
     }

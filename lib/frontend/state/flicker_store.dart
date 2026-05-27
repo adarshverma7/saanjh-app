@@ -8,6 +8,8 @@ import '../../backend/flicker_api.dart';
 import 'diary_store.dart';
 import 'send_queue_store.dart';
 
+// ── Public model ──────────────────────────────────────────────────────────────
+
 class FlickerRecord {
   final String diaryId;
   final String personName;
@@ -32,206 +34,260 @@ class FlickerRecord {
   Duration get age => DateTime.now().difference(sentAt);
 }
 
-/// The daily pulse window and urgency state.
 enum FlickerWindowState {
-  open,       // 6 AM – 9 PM  : normal
-  lastChance, // 9 PM – 10 PM : window closing
-  closed,     // 10 PM – 6 AM : window shut
+  open,
+  lastChance, // 11 PM–midnight: final nudge before daily reset
+  closed,     // reserved — window is always open in current design
 }
 
-/// Flicker is a daily "I am here" signal — separate from the voice/video streak.
-/// Streak tracking lives in DiaryStore, tied to actual content sends.
+// ── Internal per-connection per-day state ─────────────────────────────────────
+//
+// Single atomic object per (connectionId × dateKey).
+// Replaces the old List<FlickerRecord> which was vulnerable to:
+//   • duplicate records from racing SSE + API-response paths
+//   • fragmented SharedPreferences keys (flicker_records_v1, flicker_overlay_*)
+//   • state inferred from event timing rather than computed from backend truth
+//
+// Serialised as one entry per connectionId in 'flicker_state_v2'.
+// Only today's entries survive across restarts — yesterday's are silently dropped.
+
+class _RelState {
+  final String dateKey;      // 'yyyy-MM-dd' — authoritative daily-cycle key
+  final String partnerName;  // cached display name for FlickerRecord construction
+  final DateTime? mySentAt;
+  final DateTime? theirSentAt;
+  final bool receivedOverlayShown; // persisted: overlay fires exactly once per day
+  final bool mutualOverlayShown;   // persisted: mutual overlay fires exactly once per day
+
+  const _RelState({
+    required this.dateKey,
+    this.partnerName = '',
+    this.mySentAt,
+    this.theirSentAt,
+    this.receivedOverlayShown = false,
+    this.mutualOverlayShown = false,
+  });
+
+  bool get iSent    => mySentAt    != null;
+  bool get theySent => theirSentAt != null;
+  bool get isMutual => mySentAt    != null && theirSentAt != null;
+
+  _RelState copyWith({
+    String? partnerName,
+    DateTime? mySentAt,
+    DateTime? theirSentAt,
+    bool? receivedOverlayShown,
+    bool? mutualOverlayShown,
+  }) =>
+      _RelState(
+        dateKey:              dateKey,
+        partnerName:          partnerName          ?? this.partnerName,
+        mySentAt:             mySentAt             ?? this.mySentAt,
+        theirSentAt:          theirSentAt          ?? this.theirSentAt,
+        receivedOverlayShown: receivedOverlayShown ?? this.receivedOverlayShown,
+        mutualOverlayShown:   mutualOverlayShown   ?? this.mutualOverlayShown,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'dk': dateKey,
+        if (partnerName.isNotEmpty) 'n':  partnerName,
+        if (mySentAt    != null)    'ms': mySentAt!.toIso8601String(),
+        if (theirSentAt != null)    'ts': theirSentAt!.toIso8601String(),
+        if (receivedOverlayShown)   'ro': true,
+        if (mutualOverlayShown)     'mo': true,
+      };
+
+  factory _RelState.fromJson(Map<String, dynamic> j) => _RelState(
+        dateKey:     j['dk'] as String? ?? '',
+        partnerName: j['n']  as String? ?? '',
+        mySentAt:    j['ms'] != null ? DateTime.tryParse(j['ms'] as String) : null,
+        theirSentAt: j['ts'] != null ? DateTime.tryParse(j['ts'] as String) : null,
+        receivedOverlayShown: j['ro'] as bool? ?? false,
+        mutualOverlayShown:   j['mo'] as bool? ?? false,
+      );
+}
+
+// ── FlickerStore ──────────────────────────────────────────────────────────────
+
+/// Authoritative daily-presence state for all connections.
+///
+/// Design contract:
+/// - Backend is truth; SSE is the fast path; 30-second poll is the recovery path.
+/// - One atomic _RelState per connection per calendar day. No list of events.
+/// - All state transitions are idempotent: re-applying any event is safe.
+/// - Overlays fire exactly once per cycle regardless of restarts or duplicates.
+/// - Single SharedPreferences key ('flicker_state_v2') — no key fragmentation.
+/// - notifyListeners is debounced via microtask to batch concurrent transitions.
 class FlickerStore extends ChangeNotifier {
   FlickerStore._() {
-    // Restore today's records from local cache immediately on startup so that
-    // FlickerScreen shows the correct "already sent" state before the network
-    // call returns.  SharedPreferences is fast local I/O — typically < 5 ms.
-    _loadCachedRecords().ignore();
+    // Restore today's state immediately from cache so UI is correct before the
+    // first network round-trip returns. SharedPreferences is synchronous-ish
+    // local I/O — typically resolves in < 5 ms.
+    _load().ignore();
   }
   static final FlickerStore instance = FlickerStore._();
 
-  final List<FlickerRecord> _records = [];
+  // ── State ─────────────────────────────────────────────────────────────────
 
-  // Fired once per new incoming Flicker (dedup below).
+  final Map<String, _RelState> _rels = {};
+  bool _pendingNotify = false;
+
   // HomeScreen sets this to show the full-screen emotional overlay.
+  // Fired at most once per overlay type per connection per calendar day.
   void Function(FlickerRecord record)? onFlickerReceived;
 
-  // In-memory dedup: prevents re-firing within the same app session.
-  final Set<String> _overlayFiredKeys = {};
+  // ── Persistence ───────────────────────────────────────────────────────────
 
-  // ── Today's record cache (SharedPreferences) ──────────────────────────────
-  // Persists sent/received records across app restarts so the "already sent"
-  // state is immediately correct without waiting for a network round-trip.
-  // Format: JSON array of {diaryId, name, at (ISO-8601), mine (bool)}.
-  // Only today's entries are retained; yesterday's are pruned on each write.
+  static const _kStateKey = 'flicker_state_v2';
 
-  static const _kRecordsCache = 'flicker_records_v1';
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kStateKey);
+    if (raw == null) return;
+    try {
+      final today = _todayKey();
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      bool changed = false;
+      for (final e in map.entries) {
+        final s = _RelState.fromJson(e.value as Map<String, dynamic>);
+        if (s.dateKey == today) {
+          _rels[e.key] = s;
+          changed = true;
+        }
+        // States from previous days are silently discarded.
+      }
+      if (changed) notifyListeners();
+    } catch (_) {}
+  }
 
-  String _todayStr() {
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _todayKey();
+    final out = <String, dynamic>{};
+    for (final e in _rels.entries) {
+      if (e.value.dateKey == today) out[e.key] = e.value.toJson();
+    }
+    prefs.setString(_kStateKey, jsonEncode(out)).ignore();
+  }
+
+  // ── Daily cycle helpers ───────────────────────────────────────────────────
+
+  String _todayKey() {
     final n = DateTime.now();
     return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
   }
 
-  bool _isDateToday(DateTime dt) {
-    final t = _todayStr();
-    final ds = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-    return ds == t;
+  bool _isToday(DateTime dt) {
+    final n = DateTime.now();
+    return dt.year == n.year && dt.month == n.month && dt.day == n.day;
   }
 
-  // Loads today's cached records into _records on startup.
-  Future<void> _loadCachedRecords() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kRecordsCache);
-    if (raw == null) return;
-    bool changed = false;
-    try {
-      for (final item in jsonDecode(raw) as List<dynamic>) {
-        final at = DateTime.tryParse(item['at'] as String? ?? '');
-        if (at == null || !_isDateToday(at)) continue;
-        final id   = item['diaryId'] as String? ?? '';
-        final name = item['name']    as String? ?? '';
-        final mine = item['mine']    as bool?   ?? false;
-        if (id.isEmpty) continue;
-        if (mine ? hasMeFlickeredToday(id) : hasThemFlickeredToday(id)) continue;
-        _records.add(FlickerRecord(diaryId: id, personName: name, sentAt: at, isMine: mine));
-        changed = true;
-      }
-    } catch (_) {}
-    if (changed) notifyListeners();
+  DateTime? _parseIfToday(String? raw) {
+    if (raw == null) return null;
+    final dt = DateTime.tryParse(raw);
+    return (dt != null && _isToday(dt)) ? dt : null;
   }
 
-  // Persists a newly-added record; prunes entries not from today.
-  Future<void> _persistRecord(FlickerRecord r) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<Map<String, dynamic>> list = [];
-    final raw = prefs.getString(_kRecordsCache);
-    if (raw != null) {
-      try {
-        list = (jsonDecode(raw) as List<dynamic>)
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .where((m) {
-              final at = DateTime.tryParse(m['at'] as String? ?? '');
-              return at != null && _isDateToday(at);
-            })
-            .toList();
-      } catch (_) {}
-    }
-    final alreadyIn = list.any((m) => m['diaryId'] == r.diaryId && m['mine'] == r.isMine);
-    if (!alreadyIn) {
-      list.add({
-        'diaryId': r.diaryId,
-        'name': r.personName,
-        'at': r.sentAt.toIso8601String(),
-        'mine': r.isMine,
-      });
-      prefs.setString(_kRecordsCache, jsonEncode(list)).ignore();
-    }
+  // ── Atomic state machine ──────────────────────────────────────────────────
+
+  // Returns today's state, or a fresh idle state if the day has changed.
+  _RelState _base(String diaryId) {
+    final today = _todayKey();
+    final s = _rels[diaryId];
+    return (s != null && s.dateKey == today) ? s : _RelState(dateKey: today);
+  }
+
+  // All mutations go through here. Dart's single-threaded event loop guarantees
+  // that the read-modify-write is atomic within a synchronous block.
+  void _transition(String diaryId, _RelState Function(_RelState) fn) {
+    _rels[diaryId] = fn(_base(diaryId));
+    _persist().ignore();
+    _scheduleNotify();
+  }
+
+  // Batches all synchronous transitions in one event loop turn into a single
+  // notifyListeners() call, preventing rebuild spam when multiple fields update.
+  void _scheduleNotify() {
+    if (_pendingNotify) return;
+    _pendingNotify = true;
+    Future.microtask(() {
+      _pendingNotify = false;
+      notifyListeners();
+    });
   }
 
   // ── Window timing ─────────────────────────────────────────────────────────
 
-  /// Flicker is open all day — resets at midnight.
-  /// Last chance is the final hour (11 PM) to nudge before the day ends.
   FlickerWindowState get windowState {
     final h = DateTime.now().hour;
     if (h == 23) return FlickerWindowState.lastChance;
     return FlickerWindowState.open;
   }
 
-  /// Always open — no time-gated window.
   bool get windowOpen => true;
 
-  /// Time remaining in today (until midnight reset).
   Duration get timeUntilWindowCloses {
     final now = DateTime.now();
-    final midnight =
-        DateTime(now.year, now.month, now.day + 1, 0, 0);
-    return midnight.difference(now);
+    return DateTime(now.year, now.month, now.day + 1).difference(now);
   }
 
-  /// Time until midnight — when the next pulse becomes available.
-  Duration get timeUntilNextWindow {
-    final now = DateTime.now();
-    final midnight =
-        DateTime(now.year, now.month, now.day + 1, 0, 0);
-    return midnight.difference(now);
-  }
+  Duration get timeUntilNextWindow => timeUntilWindowCloses;
 
-  // ── Queries ───────────────────────────────────────────────────────────────
+  // ── Public queries (backward compatible) ──────────────────────────────────
 
-  bool _isToday(DateTime dt) {
-    final now = DateTime.now();
-    return dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  bool hasMeFlickeredToday(String diaryId)   => _base(diaryId).iSent;
+  bool hasThemFlickeredToday(String diaryId) => _base(diaryId).theySent;
+  bool isMutualToday(String diaryId)         => _base(diaryId).isMutual;
+
+  FlickerRecord? sentToday(String diaryId) {
+    final s = _base(diaryId);
+    if (!s.iSent) return null;
+    return FlickerRecord(
+      diaryId: diaryId, personName: s.partnerName,
+      sentAt: s.mySentAt!, isMine: true,
+    );
   }
 
   FlickerRecord? receivedToday(String diaryId) {
-    try {
-      return _records.lastWhere(
-          (r) => r.diaryId == diaryId && !r.isMine && _isToday(r.sentAt));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  FlickerRecord? sentToday(String diaryId) {
-    try {
-      return _records.lastWhere(
-          (r) => r.diaryId == diaryId && r.isMine && _isToday(r.sentAt));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  bool hasMeFlickeredToday(String diaryId) => sentToday(diaryId) != null;
-  bool hasThemFlickeredToday(String diaryId) => receivedToday(diaryId) != null;
-  bool isMutualToday(String diaryId) =>
-      hasMeFlickeredToday(diaryId) && hasThemFlickeredToday(diaryId);
-
-  // ── Actions ───────────────────────────────────────────────────────────────
-
-  // Returns true when the error is a connectivity issue (worth retrying later).
-  bool _isConnectivityError(Object e) {
-    if (e is DioException) {
-      return e.type == DioExceptionType.connectionError ||
-          e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout;
-    }
-    return false;
-  }
-
-  void sendFlicker(String diaryId, String personName) {
-    if (!windowOpen) return;
-    // Optimistic: show immediately so the UI is responsive.
-    final mine = FlickerRecord(
-      diaryId: diaryId,
-      personName: personName,
-      sentAt: DateTime.now(),
-      isMine: true,
+    final s = _base(diaryId);
+    if (!s.theySent) return null;
+    return FlickerRecord(
+      diaryId: diaryId, personName: s.partnerName,
+      sentAt: s.theirSentAt!, isMine: false,
     );
-    _records.add(mine);
-    _persistRecord(mine).ignore();
-    notifyListeners();
+  }
+
+  double dotOpacity(String diaryId) {
+    final s = _base(diaryId);
+    if (s.theirSentAt == null) return 0;
+    final hours = DateTime.now().difference(s.theirSentAt!).inMinutes / 60.0;
+    return (0.90 - hours * 0.06).clamp(0.18, 0.90);
+  }
+
+  // ── Send actions ──────────────────────────────────────────────────────────
+
+  void sendFlicker(String diaryId, String partnerName) {
+    if (!windowOpen) return;
+    // Optimistic: record sent time immediately.
+    // Idempotent: s.mySentAt ?? now preserves any existing timestamp.
+    _transition(diaryId, (s) => s.copyWith(
+      partnerName: partnerName,
+      mySentAt: s.mySentAt ?? DateTime.now(),
+    ));
     FlickerApi.instance.sendFlicker(diaryId).then((res) {
-      // Add partner's record if they already flickered today (any time, not just 5-min window).
       final partnerAlreadyToday =
           res['partner_flickered_today'] == true || res['is_mutual'] == true;
-      if (partnerAlreadyToday && !hasThemFlickeredToday(diaryId)) {
-        final theirs = FlickerRecord(
-          diaryId: diaryId,
-          personName: personName,
-          sentAt: DateTime.now(),
-          isMine: false,
-        );
-        _records.add(theirs);
-        _persistRecord(theirs).ignore();
-        notifyListeners();
+      if (partnerAlreadyToday) {
+        _applyTheirFlicker(diaryId, partnerName, DateTime.now());
       }
-    }).catchError((e) {
+      // Safety net: if SSE mutual_reveal was missed but API confirmed mutual.
+      if (res['is_mutual'] == true) {
+        _maybeMutualOverlay(diaryId, partnerName, DateTime.now());
+      }
+    }).catchError((Object e) {
       if (_isConnectivityError(e)) {
-        // Queue for retry when connectivity returns (today only).
         SendQueueStore.instance.enqueueFlicker(diaryId);
       }
-      // Non-connectivity errors: optimistic record stays (user sees it was sent).
     });
   }
 
@@ -239,131 +295,142 @@ class FlickerStore extends ChangeNotifier {
     if (!windowOpen) return;
     final now = DateTime.now();
     for (var i = 0; i < diaryIds.length; i++) {
-      final mine = FlickerRecord(
-        diaryId: diaryIds[i],
-        personName: names[i],
-        sentAt: now,
-        isMine: true,
-      );
-      _records.add(mine);
-      _persistRecord(mine).ignore();
       final id   = diaryIds[i];
       final name = names[i];
+      _transition(id, (s) => s.copyWith(
+        partnerName: name,
+        mySentAt: s.mySentAt ?? now,
+      ));
       FlickerApi.instance.sendFlicker(id).then((res) {
         final partnerAlreadyToday =
             res['partner_flickered_today'] == true || res['is_mutual'] == true;
-        if (partnerAlreadyToday && !hasThemFlickeredToday(id)) {
-          final theirs = FlickerRecord(
-            diaryId: id,
-            personName: name,
-            sentAt: DateTime.now(),
-            isMine: false,
-          );
-          _records.add(theirs);
-          _persistRecord(theirs).ignore();
-          notifyListeners();
+        if (partnerAlreadyToday) {
+          _applyTheirFlicker(id, name, DateTime.now());
         }
-      }).catchError((e) {
+        if (res['is_mutual'] == true) {
+          _maybeMutualOverlay(id, name, DateTime.now());
+        }
+      }).catchError((Object e) {
         if (_isConnectivityError(e)) {
           SendQueueStore.instance.enqueueFlicker(id);
         }
       });
     }
-    notifyListeners();
   }
 
-  /// Loads today's flicker status from the backend for each connection.
-  /// Call on screen init so the UI reflects the real server state.
+  // ── State rehydration ─────────────────────────────────────────────────────
+
+  /// Fetches authoritative state from backend for every connection in parallel.
+  /// Call on: startup (after connections load), app foreground, SSE reconnect.
   Future<void> loadFlickerStatus(List<DiaryContact> diaries) async {
-    var changed = false;
-    for (final diary in diaries) {
-      try {
-        final res = await FlickerApi.instance.getFlickerStatus(diary.id);
-        final myAt = res['my_last_flicker_at'] as String?;
-        final theirAt = res['partner_last_flicker_at'] as String?;
-
-        if (myAt != null) {
-          final dt = DateTime.tryParse(myAt);
-          if (dt != null && _isToday(dt) && !hasMeFlickeredToday(diary.id)) {
-            final r = FlickerRecord(
-              diaryId: diary.id,
-              personName: diary.name,
-              sentAt: dt,
-              isMine: true,
-            );
-            _records.add(r);
-            _persistRecord(r).ignore();
-            changed = true;
-          }
-        }
-
-        if (theirAt != null) {
-          final dt = DateTime.tryParse(theirAt);
-          if (dt != null && _isToday(dt) && !hasThemFlickeredToday(diary.id)) {
-            final record = FlickerRecord(
-              diaryId: diary.id,
-              personName: diary.name,
-              sentAt: dt,
-              isMine: false,
-            );
-            _records.add(record);
-            _persistRecord(record).ignore();
-            changed = true;
-            await _maybeTriggerOverlay(record);
-          }
-        }
-      } catch (_) {
-        // Ignore individual failures — partial data is fine.
-      }
-    }
-    if (changed) notifyListeners();
+    if (diaries.isEmpty) return;
+    // Parallel: old code was sequential (N × round-trip latency).
+    await Future.wait(diaries.map(_loadOneStatus).toList(), eagerError: false);
   }
 
-  /// Called by HomeScreen when an SSE `flicker_received` event arrives.
-  /// Adds the record instantly (no poll delay) and fires the overlay once.
+  Future<void> _loadOneStatus(DiaryContact diary) async {
+    try {
+      final res   = await FlickerApi.instance.getFlickerStatus(diary.id);
+      final myAt  = _parseIfToday(res['my_last_flicker_at']      as String?);
+      final theirAt = _parseIfToday(res['partner_last_flicker_at'] as String?);
+
+      if (myAt != null) {
+        _transition(diary.id, (s) => s.copyWith(
+          partnerName: diary.name,
+          mySentAt: s.mySentAt ?? myAt,
+        ));
+      }
+      if (theirAt != null) {
+        _applyTheirFlicker(diary.id, diary.name, theirAt);
+      }
+    } catch (_) {
+      // Partial failures are fine — other connections still update.
+    }
+  }
+
+  // ── SSE fast-path handlers ────────────────────────────────────────────────
+
+  /// Called by HomeScreen when SSE `flicker_received` arrives.
   Future<void> handleSseFlickerReceived({
     required String diaryId,
     required String personName,
     required DateTime sentAt,
   }) async {
     if (!_isToday(sentAt)) return;
-    if (hasThemFlickeredToday(diaryId)) return;
-    final record = FlickerRecord(
-      diaryId: diaryId,
-      personName: personName,
-      sentAt: sentAt,
-      isMine: false,
-    );
-    _records.add(record);
-    _persistRecord(record).ignore();
-    notifyListeners();
-    await _maybeTriggerOverlay(record);
+    _applyTheirFlicker(diaryId, personName, sentAt);
   }
 
-  // Fires the full-screen overlay exactly once per diary per calendar day.
-  Future<void> _maybeTriggerOverlay(FlickerRecord record) async {
-    final now = DateTime.now();
-    final dateStr = '${now.year}-'
-        '${now.month.toString().padLeft(2, '0')}-'
-        '${now.day.toString().padLeft(2, '0')}';
-    final overlayKey = '${record.diaryId}:$dateStr';
-    if (_overlayFiredKeys.contains(overlayKey)) return;
-    final prefs = await SharedPreferences.getInstance();
-    if (!(prefs.getBool('flicker_overlay_$overlayKey') ?? false)) {
-      _overlayFiredKeys.add(overlayKey);
-      prefs.setBool('flicker_overlay_$overlayKey', true).ignore();
-      onFlickerReceived?.call(record);
-    } else {
-      _overlayFiredKeys.add(overlayKey);
+  /// Called by HomeScreen when SSE `mutual_reveal` arrives.
+  /// First-sender path: they never got a `flicker_received` event, so this is
+  /// where they learn the partner flickered back.
+  Future<void> handleSseMutualReveal({
+    required String diaryId,
+    required String personName,
+    required DateTime sentAt,
+  }) async {
+    if (!_isToday(sentAt)) return;
+    _applyTheirFlicker(diaryId, personName, sentAt);
+    // Explicit safety net: fires mutual overlay even when theirSentAt was already
+    // set (second-sender path, flicker_received arrived earlier) but the mutual
+    // overlay hasn't shown yet.
+    _maybeMutualOverlay(diaryId, personName, sentAt);
+  }
+
+  // ── Overlay logic (idempotent) ────────────────────────────────────────────
+
+  // Applies the partner's flicker and fires the appropriate overlay exactly once.
+  //
+  // Idempotency: theirSentAt is only set when null (s.theirSentAt ?? sentAt).
+  // Overlay decisions are based on the state diff (before vs after), so
+  // re-applying the same event is always a no-op.
+  void _applyTheirFlicker(String diaryId, String name, DateTime sentAt) {
+    final before = _base(diaryId);
+
+    _transition(diaryId, (s) => s.copyWith(
+      partnerName: name,
+      theirSentAt: s.theirSentAt ?? sentAt, // idempotent: preserve earlier timestamp
+    ));
+
+    final after = _base(diaryId);
+
+    // Fire overlay only on state transitions — not on re-applications.
+    if (!before.isMutual && after.isMutual) {
+      _maybeMutualOverlay(diaryId, name, sentAt);
+    } else if (!before.theySent && after.theySent) {
+      _maybeReceivedOverlay(diaryId, name, sentAt);
     }
   }
 
-  // ── Dot opacity (dims as the pulse ages through the day) ──────────────────
+  // Fires the "they flickered" overlay exactly once per day.
+  // Persisted: survives restarts and reconnects.
+  void _maybeReceivedOverlay(String diaryId, String name, DateTime sentAt) {
+    if (_base(diaryId).receivedOverlayShown) return;
+    _transition(diaryId, (cur) => cur.copyWith(receivedOverlayShown: true));
+    onFlickerReceived?.call(FlickerRecord(
+      diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false,
+    ));
+  }
 
-  double dotOpacity(String diaryId) {
-    final r = receivedToday(diaryId);
-    if (r == null) return 0;
-    final hours = r.age.inMinutes / 60.0;
-    return (0.90 - hours * 0.06).clamp(0.18, 0.90);
+  // Fires the "you're both here" overlay exactly once per day.
+  // Uses a separate key from received overlay — both can fire independently.
+  void _maybeMutualOverlay(String diaryId, String name, DateTime sentAt) {
+    final s = _base(diaryId);
+    if (!s.isMutual) return;
+    if (s.mutualOverlayShown) return;
+    _transition(diaryId, (cur) => cur.copyWith(mutualOverlayShown: true));
+    onFlickerReceived?.call(FlickerRecord(
+      diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false,
+    ));
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  bool _isConnectivityError(Object e) {
+    if (e is DioException) {
+      return e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout;
+    }
+    return false;
   }
 }
