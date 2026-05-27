@@ -156,7 +156,13 @@ class FlickerStore extends ChangeNotifier {
         }
         // States from previous days are silently discarded.
       }
-      if (changed) notifyListeners();
+      if (changed) {
+        notifyListeners();
+        // Callback is set by HomeScreen.initState() synchronously before this
+        // Future resolves, so any overlay pending in the restored cache can fire
+        // immediately here instead of waiting for the next network round-trip.
+        _checkPendingOverlays();
+      }
     } catch (_) {}
   }
 
@@ -326,6 +332,10 @@ class FlickerStore extends ChangeNotifier {
     if (diaries.isEmpty) return;
     // Parallel: old code was sequential (N × round-trip latency).
     await Future.wait(diaries.map(_loadOneStatus).toList(), eagerError: false);
+    // Fire any overlays that _loadOneStatus revealed but _applyTheirFlicker
+    // couldn't trigger because theirSentAt was already in the restored cache
+    // (state transition diff = no-op → _maybeReceivedOverlay not reached).
+    _checkPendingOverlays();
   }
 
   Future<void> _loadOneStatus(DiaryContact diary) async {
@@ -403,10 +413,13 @@ class FlickerStore extends ChangeNotifier {
 
   // Fires the "they flickered" overlay exactly once per day.
   // Persisted: survives restarts and reconnects.
+  // Guard: if callback is absent, leaves receivedOverlayShown=false so
+  // _checkPendingOverlays() can retry once the callback is wired up.
   void _maybeReceivedOverlay(String diaryId, String name, DateTime sentAt) {
     if (_base(diaryId).receivedOverlayShown) return;
+    if (onFlickerReceived == null) return; // retry via _checkPendingOverlays
     _transition(diaryId, (cur) => cur.copyWith(receivedOverlayShown: true));
-    onFlickerReceived?.call(FlickerRecord(
+    onFlickerReceived!.call(FlickerRecord(
       diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false,
     ));
   }
@@ -417,10 +430,32 @@ class FlickerStore extends ChangeNotifier {
     final s = _base(diaryId);
     if (!s.isMutual) return;
     if (s.mutualOverlayShown) return;
+    if (onFlickerReceived == null) return; // retry via _checkPendingOverlays
     _transition(diaryId, (cur) => cur.copyWith(mutualOverlayShown: true));
-    onFlickerReceived?.call(FlickerRecord(
+    onFlickerReceived!.call(FlickerRecord(
       diaryId: diaryId, personName: name, sentAt: sentAt, isMine: false,
     ));
+  }
+
+  // Scans all connections for pending (unshown) overlays and fires the first one.
+  // Called after cache restore and after every loadFlickerStatus so overlays
+  // that were pending while the callback was absent are never permanently lost.
+  void _checkPendingOverlays() {
+    if (onFlickerReceived == null) return;
+    final today = _todayKey();
+    for (final e in _rels.entries) {
+      final s = e.value;
+      if (s.dateKey != today) continue;
+      // Mutual takes priority over received.
+      if (s.isMutual && !s.mutualOverlayShown) {
+        _maybeMutualOverlay(e.key, s.partnerName, s.theirSentAt ?? DateTime.now());
+        return; // one overlay at a time
+      }
+      if (s.theySent && !s.receivedOverlayShown) {
+        _maybeReceivedOverlay(e.key, s.partnerName, s.theirSentAt!);
+        return;
+      }
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
