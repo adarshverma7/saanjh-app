@@ -373,16 +373,15 @@ class _RecordScreenState extends State<RecordScreen>
         for (final id in targets) {
           final localId = '${batchId}_$id';
           try {
-            final uploadResult = await EntriesApi.instance.getUploadUrl(
-              connectionId:    id,
-              entryType:       entryType,
-              fileExtension:   fileExt,
-              durationSeconds: effectiveDuration,
-              fileSizeBytes:   bytes.length,
+            // Step 1: pre-create pending row, get presigned PUT URL.
+            final reqResult = await EntriesApi.instance.requestUpload(
+              connectionId: id,
+              entryType:    entryType,
             );
 
+            // Step 2: PUT bytes directly to B2.
             await EntriesApi.instance.uploadToStorage(
-              uploadUrl:   uploadResult.uploadUrl,
+              uploadUrl:   reqResult.uploadUrl,
               bytes:       bytes,
               contentType: contentType,
               onProgress: (sent, total) {
@@ -394,19 +393,19 @@ class _RecordScreenState extends State<RecordScreen>
 
             if (mounted) setState(() => _uploadProgress = null);
 
-            await EntriesApi.instance.createEntry(
+            // Step 3: confirm — verifies B2 upload, marks completed, SSEs partner.
+            await EntriesApi.instance.confirmUpload(
               connectionId:    id,
-              entryType:       entryType,
-              mediaKey:        uploadResult.mediaKey,
+              entryId:         reqResult.entryId,
               durationSeconds: effectiveDuration,
               recordedAt:      sendTime,
             );
 
-            // Replace pending entry with real backend data.
-            store.markUploadComplete(localId, uploadResult.entryId);
+            // Replace pending entry with the pre-created backend ID.
+            store.markUploadComplete(localId, reqResult.entryId);
 
             TranscriptionService.instance.transcribeFile(filePath).then((t) {
-              if (t != null) store.updateEntryTranscript(uploadResult.entryId, t);
+              if (t != null) store.updateEntryTranscript(reqResult.entryId, t);
             });
           } catch (e) {
             debugPrint('[upload] ${e.runtimeType}: $e');

@@ -367,24 +367,23 @@ class SendQueueStore extends ChangeNotifier {
 
         final bytes = await file.readAsBytes();
 
-        final result = await EntriesApi.instance.getUploadUrl(
-          connectionId:    upload.diaryId,
-          entryType:       upload.entryType,
-          fileExtension:   upload.fileExt,
-          durationSeconds: upload.durationSeconds,
-          fileSizeBytes:   bytes.length,
+        // Step 1: pre-create pending row, get presigned PUT URL.
+        final result = await EntriesApi.instance.requestUpload(
+          connectionId: upload.diaryId,
+          entryType:    upload.entryType,
         );
 
+        // Step 2: PUT bytes directly to B2.
         await EntriesApi.instance.uploadToStorage(
           uploadUrl:   result.uploadUrl,
           bytes:       bytes,
           contentType: upload.contentType,
         );
 
-        await EntriesApi.instance.createEntry(
+        // Step 3: confirm upload, SSEs partner with signed URL.
+        await EntriesApi.instance.confirmUpload(
           connectionId:    upload.diaryId,
-          entryType:       upload.entryType,
-          mediaKey:        result.mediaKey,
+          entryId:         result.entryId,
           durationSeconds: upload.durationSeconds,
           recordedAt:      upload.recordedAt,
         );

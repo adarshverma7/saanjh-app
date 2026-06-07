@@ -10,43 +10,32 @@ class EntriesApi {
 
   Dio get _dio => ApiClient.instance.dio;
 
-  // ── Upload flow ─────────────────────────────────────────────────────────────
+  // ── Telegram-style upload flow ──────────────────────────────────────────────
 
-  /// Step 1: get a canonical storage path + entry ID + signed upload URL from the backend.
-  Future<UploadUrlResult> getUploadUrl({
+  /// Step 1: pre-create a pending DB row and get a 15-min presigned PUT URL.
+  /// The entry_id is stable — use it in confirmUpload after the PUT completes.
+  Future<RequestUploadResult> requestUpload({
     required String connectionId,
-    required String entryType,       // 'voice' | 'video'
-    required String fileExtension,   // 'm4a'   | 'mp4'
-    required int durationSeconds,
-    required int fileSizeBytes,
+    required String entryType, // 'voice' | 'video'
   }) async {
     final res = await _dio.post(
-      '/connections/$connectionId/entries/upload-url',
-      data: {
-        'entry_type':       entryType,
-        'file_extension':   fileExtension,
-        'duration_seconds': durationSeconds,
-        'file_size_bytes':  fileSizeBytes,
-      },
+      '/connections/$connectionId/entries/request-upload',
+      data: {'entry_type': entryType},
     );
-    return UploadUrlResult.fromJson(res.data as Map<String, dynamic>);
+    return RequestUploadResult.fromJson(res.data as Map<String, dynamic>);
   }
 
-  /// Step 2: upload bytes directly to Supabase Storage via the signed URL.
+  /// Step 2: upload bytes directly to Backblaze B2 via the presigned PUT URL.
+  /// Uses a bare Dio (no auth interceptor) — the URL is self-contained.
   Future<void> uploadToStorage({
     required String uploadUrl,
     required Uint8List bytes,
     required String contentType,
     void Function(int sent, int total)? onProgress,
   }) async {
-    // Separate Dio without auth interceptor — Supabase signed URLs are self-contained.
-    // Stream-based upload triggers chunked transfer encoding (no Content-Length),
-    // which Supabase rejects. Sending Uint8List directly lets Dio set Content-Length.
     final storageDio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 30),
-      // 5 min: a 20s video at high quality on slow connections can be 30-50 MB.
-      sendTimeout: const Duration(seconds: 300),
-      // 60 s: Supabase processes and responds after the upload stream closes.
+      sendTimeout: const Duration(seconds: 300), // 5 min for large files
       receiveTimeout: const Duration(seconds: 60),
       followRedirects: true,
       maxRedirects: 3,
@@ -56,33 +45,30 @@ class EntriesApi {
       data: bytes,
       options: Options(
         contentType: contentType,
-        headers: {
-          // Allow overwrite on retry — Supabase rejects a second PUT to the
-          // same key without this flag (returns 400 "already exists").
-          'x-upsert': 'true',
-        },
+        // Content-Length is set automatically by Dio when body is Uint8List.
+        // No extra headers needed — B2 presigned URLs are self-contained.
+        headers: const <String, dynamic>{},
       ),
       onSendProgress: onProgress,
     );
   }
 
-  /// Step 3: confirm the entry with the backend (verifies upload completed).
-  Future<Map<String, dynamic>> createEntry({
+  /// Step 3: verify the B2 upload and mark the entry completed.
+  /// Backend pushes an SSE new_entry event (with signed URL) to the partner.
+  Future<Map<String, dynamic>> confirmUpload({
     required String connectionId,
-    required String entryType,
-    required String mediaKey,
-    int? durationSeconds,
-    String? mood,
+    required String entryId,
+    required int durationSeconds,
     DateTime? recordedAt,
+    String? mood,
   }) async {
     final res = await _dio.post(
-      '/connections/$connectionId/entries',
+      '/connections/$connectionId/entries/confirm',
       data: {
-        'entry_type':  entryType,
-        'media_key':   mediaKey,
-        'duration_seconds': ?durationSeconds,
-        'mood': ?mood,
-        'recorded_at': ?recordedAt?.toIso8601String(),
+        'entry_id':         entryId,
+        'duration_seconds': durationSeconds,
+        'recorded_at':      ?recordedAt?.toIso8601String(),
+        'mood':             ?mood,
       },
     );
     return res.data as Map<String, dynamic>;
@@ -117,7 +103,8 @@ class EntriesApi {
   /// Memory Tree — bypasses expiry so old moments are always playable.
   Future<Map<String, dynamic>> getMomentsEntry(
       String connectionId, String entryId) async {
-    final res = await _dio.get('/connections/$connectionId/entries/$entryId/moments');
+    final res =
+        await _dio.get('/connections/$connectionId/entries/$entryId/moments');
     return res.data as Map<String, dynamic>;
   }
 
@@ -137,7 +124,7 @@ class EntriesApi {
     await _dio.delete('/connections/$connectionId/entries/$entryId');
   }
 
-  /// Sends a text message — no upload step, content goes directly to the API.
+  /// Sends a text message — no upload step needed, content goes directly to the API.
   Future<Map<String, dynamic>> sendTextMessage({
     required String connectionId,
     required String content,
@@ -147,10 +134,10 @@ class EntriesApi {
     final res = await _dio.post(
       '/connections/$connectionId/entries',
       data: {
-        'entry_type': 'text',
-        'content': content,
-        if (mood != null) 'mood': mood,
-        if (recordedAt != null) 'recorded_at': recordedAt.toIso8601String(),
+        'entry_type':  'text',
+        'content':     content,
+        'mood':        ?mood,
+        'recorded_at': ?recordedAt?.toIso8601String(),
       },
     );
     return res.data as Map<String, dynamic>;
@@ -159,34 +146,40 @@ class EntriesApi {
   /// Saves a text message to the Memory Tree (Moments).
   Future<Map<String, dynamic>> saveToMoments(
       String connectionId, String entryId) async {
-    final res = await _dio.patch(
-        '/connections/$connectionId/entries/$entryId/save-to-moments');
+    final res = await _dio
+        .patch('/connections/$connectionId/entries/$entryId/save-to-moments');
     return res.data as Map<String, dynamic>;
   }
 
   /// Removes a text message from the Memory Tree (Moments).
   Future<Map<String, dynamic>> removeFromMoments(
       String connectionId, String entryId) async {
-    final res = await _dio.delete(
-        '/connections/$connectionId/entries/$entryId/save-to-moments');
+    final res = await _dio
+        .delete('/connections/$connectionId/entries/$entryId/save-to-moments');
     return res.data as Map<String, dynamic>;
   }
 }
 
-class UploadUrlResult {
-  final String mediaKey;
-  final String entryId;
-  final String uploadUrl;
+// ── Result types ──────────────────────────────────────────────────────────────
 
-  const UploadUrlResult({
-    required this.mediaKey,
+class RequestUploadResult {
+  final String entryId;
+  final String mediaKey;
+  final String uploadUrl;
+  final String expiresAt; // ISO timestamp
+
+  const RequestUploadResult({
     required this.entryId,
+    required this.mediaKey,
     required this.uploadUrl,
+    required this.expiresAt,
   });
 
-  factory UploadUrlResult.fromJson(Map<String, dynamic> j) => UploadUrlResult(
-        mediaKey:  j['media_key']  as String,
+  factory RequestUploadResult.fromJson(Map<String, dynamic> j) =>
+      RequestUploadResult(
         entryId:   j['entry_id']   as String,
+        mediaKey:  j['media_key']  as String,
         uploadUrl: j['upload_url'] as String,
+        expiresAt: j['expires_at'] as String,
       );
 }
