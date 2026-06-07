@@ -154,12 +154,21 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
           : e.type == 'text'
               ? _EntryType.text
               : _EntryType.voice;
+      // Use the local file path first (just-recorded entry).
+      // Fall back to the signed URL delivered via SSE — but only if it has
+      // not yet expired (URLs are valid for ~1 hour after the SSE event).
+      String effectivePath = e.path;
+      if (effectivePath.isEmpty && e.cachedMediaUrl != null) {
+        final expires = e.urlExpiresAt;
+        if (expires == null || DateTime.now().isBefore(expires)) {
+          effectivePath = e.cachedMediaUrl!;
+        }
+      }
+
       return _Entry(
         id: e.id,
         isMine: e.isMine,
         type: entryType,
-        // durationSeconds defaults to 20 (max recording length) until real
-        // audio playback is wired in Prompt 22.
         duration: _formatDuration(e.durationSeconds > 0 ? e.durationSeconds : 20),
         durationSeconds: e.durationSeconds > 0 ? e.durationSeconds : 20,
         transcript: e.transcript,
@@ -167,7 +176,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         occasionTag: e.occasionTag,
         time: _formatTime(e.createdAt),
         listened: e.listenedAt != null,
-        path: e.path,
+        path: effectivePath,
         isExpired: e.isExpired,
         isPending: e.isPending,
         isFailed: e.isFailed,

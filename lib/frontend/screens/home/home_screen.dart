@@ -10,7 +10,6 @@ import 'package:go_router/go_router.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-import '../../../backend/entries_api.dart';
 import '../../../backend/flicker_api.dart';
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
@@ -407,39 +406,65 @@ class _HomeScreenState extends State<HomeScreen>
           FlickerStore.instance.loadFlickerStatus([diary]);
         }
       } else if (type == 'new_entry') {
-        final entryId = event['entry_id'] as String?;
+        final entryId  = event['entry_id']  as String?;
         final authorId = event['author_id'] as String?;
         if (entryId != null && authorId != null) {
-          _onNewEntryReceived(diaryId, entryId);
+          _onNewEntryReceived(diaryId, event);
         }
       }
     } catch (_) {}
   }
 
-  Future<void> _onNewEntryReceived(String diaryId, String entryId) async {
+  /// Handles a real-time new_entry SSE event.
+  ///
+  /// Builds the DiaryEntry directly from the event payload — no extra API call
+  /// needed. The backend sends entry_type, duration_seconds, media_url, and
+  /// url_expires_at alongside the entry_id, so we have everything we need.
+  void _onNewEntryReceived(String diaryId, Map<String, dynamic> event) {
     if (!mounted) return;
-    if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) return;
-    try {
-      final item = await EntriesApi.instance.getEntry(diaryId, entryId);
-      if (!mounted) return;
-      if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) return;
-      final myUserId = UserStore.instance.userId;
-      final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
-      DiaryStore.instance.addEntry(DiaryEntry(
-        id: item['id'] as String,
-        diaryId: diaryId,
-        isMine: (item['author_id'] as String?) == myUserId,
-        type: item['entry_type'] as String? ?? 'voice',
-        path: '',
-        transcript: item['transcription'] as String?,
-        createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
-        durationSeconds: item['duration_seconds'] as int? ?? 0,
-        isExpired: item['is_expired'] as bool? ?? false,
-        listenedAt: (item['play_count'] as int? ?? 0) > 0
-            ? DateTime.fromMillisecondsSinceEpoch(0)
-            : null,
-      ));
-    } catch (_) {}
+    final entryId = event['entry_id'] as String;
+    // Dedup: ignore if already in the store (e.g. arrived via polling first).
+    if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) {
+      return;
+    }
+
+    final myUserId  = UserStore.instance.userId;
+    final authorId  = event['author_id']  as String? ?? '';
+    final entryType = event['entry_type'] as String? ?? 'voice';
+    final duration  = event['duration_seconds'] as int? ?? 0;
+    final mediaUrl     = event['media_url']     as String?;
+    final expiresAtStr = event['url_expires_at'] as String?;
+    final expiresAt = expiresAtStr != null
+        ? DateTime.tryParse(expiresAtStr)
+        : null;
+    final now = DateTime.now();
+
+    final entry = DiaryEntry(
+      id:              entryId,
+      diaryId:         diaryId,
+      isMine:          authorId == myUserId,
+      type:            entryType,
+      path:            '',
+      createdAt:       now,
+      durationSeconds: duration,
+      cachedMediaUrl:  mediaUrl,
+      urlExpiresAt:    expiresAt,
+    );
+
+    DiaryStore.instance.addEntry(entry);
+
+    // Update the home-screen card preview so the contact list reflects the
+    // latest message without waiting for the next poll.
+    final h = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final m = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour < 12 ? 'am' : 'pm';
+    final timeStr = '$h:$m $ampm';
+    final snippet = entryType == 'text'
+        ? '💬 Message'
+        : entryType == 'video'
+            ? '🎬 Video'
+            : '🎙 Voice note';
+    DiaryStore.instance.updateSnippet(diaryId, snippet, timeStr);
   }
 
   // ── Flicker received ───────────────────────────────────────────────────────

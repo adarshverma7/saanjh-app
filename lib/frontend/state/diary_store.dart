@@ -33,6 +33,11 @@ class DiaryEntry {
   final bool isFailed;  // upload failed but queued for retry
   final bool savedToMoments; // text-only: user explicitly saved to Memory Tree
 
+  // Signed media URL delivered via SSE new_entry event. Valid for ~1 hour.
+  // Non-null for voice/video entries received in real-time; null for polled entries.
+  final String? cachedMediaUrl;
+  final DateTime? urlExpiresAt; // when cachedMediaUrl becomes stale
+
   DiaryEntry({
     required this.id,
     required this.diaryId,
@@ -53,6 +58,8 @@ class DiaryEntry {
     this.isPending = false,
     this.isFailed = false,
     this.savedToMoments = false,
+    this.cachedMediaUrl,
+    this.urlExpiresAt,
   }) : reactions = reactions ?? [];
 }
 
