@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-const String kApiBaseUrl = 'https://web-production-01022.up.railway.app/v1';
+const String kApiBaseUrl = 'https://saanjh-backend-x4od.onrender.com/v1';
 
 const _kAccessToken  = 'access_token';
 const _kRefreshToken = 'refresh_token';
