@@ -61,6 +61,43 @@ class DiaryEntry {
     this.cachedMediaUrl,
     this.urlExpiresAt,
   }) : reactions = reactions ?? [];
+
+  /// Non-null overrides only — a field can't be reset to null via copyWith.
+  DiaryEntry copyWith({
+    String? id,
+    String? path,
+    String? content,
+    String? transcript,
+    bool? isPending,
+    bool? isFailed,
+    bool? savedToMoments,
+    String? cachedMediaUrl,
+    DateTime? urlExpiresAt,
+  }) {
+    return DiaryEntry(
+      id: id ?? this.id,
+      diaryId: diaryId,
+      isMine: isMine,
+      type: type,
+      path: path ?? this.path,
+      content: content ?? this.content,
+      transcript: transcript ?? this.transcript,
+      prompt: prompt,
+      occasionTag: occasionTag,
+      createdAt: createdAt,
+      durationSeconds: durationSeconds,
+      isExpired: isExpired,
+      listenedAt: listenedAt,
+      moodEnergy: moodEnergy,
+      reactions: reactions,
+      parentEntryId: parentEntryId,
+      isPending: isPending ?? this.isPending,
+      isFailed: isFailed ?? this.isFailed,
+      savedToMoments: savedToMoments ?? this.savedToMoments,
+      cachedMediaUrl: cachedMediaUrl ?? this.cachedMediaUrl,
+      urlExpiresAt: urlExpiresAt ?? this.urlExpiresAt,
+    );
+  }
 }
 
 // ─── DiaryContact ─────────────────────────────────────────────────────────────
@@ -452,24 +489,7 @@ class DiaryStore extends ChangeNotifier {
       final list = _entries[diaryId]!;
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == entryId) {
-          final old = list[i];
-          list[i] = DiaryEntry(
-            id: old.id,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
-            path: old.path,
-            transcript: transcript,
-            prompt: old.prompt,
-            occasionTag: old.occasionTag,
-            createdAt: old.createdAt,
-            durationSeconds: old.durationSeconds,
-            isExpired: old.isExpired,
-            listenedAt: old.listenedAt,
-            moodEnergy: old.moodEnergy,
-            reactions: old.reactions,
-            parentEntryId: old.parentEntryId,
-          );
+          list[i] = list[i].copyWith(transcript: transcript);
           notifyListeners();
           return;
         }
@@ -844,21 +864,8 @@ class DiaryStore extends ChangeNotifier {
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == pendingId) {
           final old = list[i];
-          list[i] = DiaryEntry(
+          list[i] = old.copyWith(
             id: realEntryId,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
-            path: old.path,
-            transcript: old.transcript,
-            prompt: old.prompt,
-            occasionTag: old.occasionTag,
-            createdAt: old.createdAt,
-            durationSeconds: old.durationSeconds,
-            listenedAt: old.listenedAt,
-            moodEnergy: old.moodEnergy,
-            reactions: old.reactions,
-            parentEntryId: old.parentEntryId,
             isPending: false,
             isFailed: false,
           );
@@ -881,26 +888,7 @@ class DiaryStore extends ChangeNotifier {
       final list = _entries[diaryId]!;
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == pendingId) {
-          final old = list[i];
-          list[i] = DiaryEntry(
-            id: old.id,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
-            path: old.path,
-            transcript: old.transcript,
-            prompt: old.prompt,
-            occasionTag: old.occasionTag,
-            createdAt: old.createdAt,
-            durationSeconds: old.durationSeconds,
-            isExpired: old.isExpired,
-            listenedAt: old.listenedAt,
-            moodEnergy: old.moodEnergy,
-            reactions: old.reactions,
-            parentEntryId: old.parentEntryId,
-            isPending: false,
-            isFailed: true,
-          );
+          list[i] = list[i].copyWith(isPending: false, isFailed: true);
           // Update snippet to reflect failed state.
           final idx = _diaries.indexWhere((d) => d.id == diaryId);
           if (idx != -1 && _diaries[idx].lastSnippet == '⏳ Sending...') {
@@ -924,14 +912,9 @@ class DiaryStore extends ChangeNotifier {
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == pendingId) {
           final old = list[i];
-          list[i] = DiaryEntry(
+          list[i] = old.copyWith(
             id: realEntryId,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
             path: '',
-            content: old.content,
-            createdAt: old.createdAt,
             isPending: false,
             isFailed: false,
           );
@@ -953,15 +936,8 @@ class DiaryStore extends ChangeNotifier {
       final list = _entries[diaryId]!;
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == pendingId) {
-          final old = list[i];
-          list[i] = DiaryEntry(
-            id: old.id,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
+          list[i] = list[i].copyWith(
             path: '',
-            content: old.content,
-            createdAt: old.createdAt,
             isPending: false,
             isFailed: true,
           );
@@ -986,21 +962,7 @@ class DiaryStore extends ChangeNotifier {
     for (final list in _entries.values) {
       for (int i = 0; i < list.length; i++) {
         if (list[i].id == entryId) {
-          final old = list[i];
-          list[i] = DiaryEntry(
-            id: old.id,
-            diaryId: old.diaryId,
-            isMine: old.isMine,
-            type: old.type,
-            path: old.path,
-            content: old.content,
-            transcript: old.transcript,
-            createdAt: old.createdAt,
-            durationSeconds: old.durationSeconds,
-            listenedAt: old.listenedAt,
-            moodEnergy: old.moodEnergy,
-            reactions: old.reactions,
-            parentEntryId: old.parentEntryId,
+          list[i] = list[i].copyWith(
             isPending: false,
             isFailed: false,
             savedToMoments: saved,

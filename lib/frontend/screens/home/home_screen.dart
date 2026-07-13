@@ -411,6 +411,12 @@ class _HomeScreenState extends State<HomeScreen>
         if (entryId != null && authorId != null) {
           _onNewEntryReceived(diaryId, event);
         }
+      } else if (type == 'transcription_ready') {
+        final entryId       = event['entry_id']      as String?;
+        final transcription = event['transcription'] as String?;
+        if (entryId != null && transcription != null && transcription.isNotEmpty) {
+          DiaryStore.instance.updateEntryTranscript(entryId, transcription);
+        }
       }
     } catch (_) {}
   }
