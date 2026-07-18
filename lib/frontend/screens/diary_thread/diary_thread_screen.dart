@@ -21,6 +21,7 @@ import '../../theme/app_typography.dart';
 import '../../services/audio_analysis_service.dart';
 import '../../services/share_card_service.dart';
 import '../../widgets/milestone_share_card.dart';
+import '../../widgets/motion/saanjh_skeleton.dart';
 import '../../widgets/saanjh_dialog.dart';
 import '../../widgets/voice_share_card.dart';
 import '../../widgets/notification_banner.dart';
@@ -731,11 +732,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
               ),
                 Expanded(
                   child: _isLoadingEntries
-                      ? const Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.ember,
-                            strokeWidth: 2,
-                          ),
+                      ? const Padding(
+                          padding: EdgeInsets.only(top: 12),
+                          child: ThreadSkeleton(),
                         )
                       : _entries.isEmpty
                           ? _EmptyThread()

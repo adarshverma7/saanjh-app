@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
-import '../theme/app_motion.dart';
+import 'motion/saanjh_reveal.dart';
 
-/// Fades and slides a list item in after a staggered delay derived from
-/// its [index] via [AppMotion.stagger].
+/// Fades and rises a list item in after a staggered, index-derived delay.
 ///
-/// Items with [index] > [AppMotion.stagger]'s maxIndex cap appear
-/// immediately so that scrolling into long lists has no lag.
-class SaanjhStaggerItem extends StatefulWidget {
+/// Kept as the app-wide stagger entry point (many screens use it); it now
+/// delegates to [SaanjhReveal] so every list gets the crisper fade-up-with-scale
+/// entrance and reduced-motion handling for free.
+class SaanjhStaggerItem extends StatelessWidget {
   final int index;
   final Widget child;
 
@@ -18,37 +18,6 @@ class SaanjhStaggerItem extends StatefulWidget {
   });
 
   @override
-  State<SaanjhStaggerItem> createState() => _SaanjhStaggerItemState();
-}
-
-class _SaanjhStaggerItemState extends State<SaanjhStaggerItem> {
-  bool _visible = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final delay = AppMotion.stagger(widget.index);
-    if (delay == Duration.zero) {
-      _visible = true;
-    } else {
-      Future.delayed(delay, () {
-        if (mounted) setState(() => _visible = true);
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      opacity: _visible ? 1.0 : 0.0,
-      duration: AppMotion.slow,
-      curve: AppMotion.easeOut,
-      child: AnimatedSlide(
-        offset: _visible ? Offset.zero : const Offset(0, 0.03),
-        duration: AppMotion.slow,
-        curve: AppMotion.easeOut,
-        child: widget.child,
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      SaanjhReveal.staggered(index: index, child: child);
 }

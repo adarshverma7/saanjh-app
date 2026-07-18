@@ -40,6 +40,7 @@ import '../screens/welcome_home/welcome_home_screen.dart';
 import '../screens/me/me_screen.dart';
 import '../state/user_store.dart';
 import 'app_routes.dart';
+import 'saanjh_transitions.dart';
 
 // All routes accessible WITHOUT being logged in.
 // Includes the full pre-login onboarding flow.
@@ -190,7 +191,7 @@ class AppRouter {
         name: 'record',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: RecordScreen(
+          return SaanjhModalPage(child: RecordScreen(
             isVideo: extra['isVideo'] as bool? ?? false,
             autoStart: extra['autoStart'] as bool? ?? false,
             broadcastTo: (extra['broadcastTo'] as List?)?.cast<String>(),
