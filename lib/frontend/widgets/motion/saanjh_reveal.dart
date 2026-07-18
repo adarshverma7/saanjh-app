@@ -61,18 +61,21 @@ class _SaanjhRevealState extends State<SaanjhReveal>
 
   bool _reducedMotion = false;
 
+  bool _kickedOff = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Resolve reduce-motion once dependencies (MediaQuery) are available.
-    final disable = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    if (disable != _reducedMotion) {
-      _reducedMotion = disable;
-      if (_reducedMotion) {
-        _c.value = 1.0;
-      } else if (_c.status == AnimationStatus.dismissed) {
-        _start();
-      }
+    // Run exactly once, on the first time dependencies (MediaQuery) resolve.
+    if (_kickedOff) return;
+    _kickedOff = true;
+
+    // Reduce-motion: skip the animation and show the child fully.
+    _reducedMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_reducedMotion) {
+      _c.value = 1.0;
+    } else {
+      _start();
     }
   }
 
