@@ -17,10 +17,14 @@ class EntriesApi {
   Future<RequestUploadResult> requestUpload({
     required String connectionId,
     required String entryType, // 'voice' | 'video'
+    String? clientMsgId, // stable idempotency key, reused across retries
   }) async {
     final res = await _dio.post(
       '/connections/$connectionId/entries/request-upload',
-      data: {'entry_type': entryType},
+      data: {
+        'entry_type':    entryType,
+        'client_msg_id': ?clientMsgId,
+      },
     );
     return RequestUploadResult.fromJson(res.data as Map<String, dynamic>);
   }
@@ -130,14 +134,16 @@ class EntriesApi {
     required String content,
     String? mood,
     DateTime? recordedAt,
+    String? clientMsgId, // stable idempotency key, reused across retries
   }) async {
     final res = await _dio.post(
       '/connections/$connectionId/entries',
       data: {
-        'entry_type':  'text',
-        'content':     content,
-        'mood':        ?mood,
-        'recorded_at': ?recordedAt?.toIso8601String(),
+        'entry_type':    'text',
+        'content':       content,
+        'mood':          ?mood,
+        'recorded_at':   ?recordedAt?.toIso8601String(),
+        'client_msg_id': ?clientMsgId,
       },
     );
     return res.data as Map<String, dynamic>;

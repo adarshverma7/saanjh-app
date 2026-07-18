@@ -649,6 +649,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         connectionId: widget.diaryId,
         content: content.trim(),
         recordedAt: now,
+        clientMsgId: pendingId, // stable key — retry reuses the same server row
       );
       final entryId = data['id'] as String;
       DiaryStore.instance.markTextSent(pendingId, entryId);

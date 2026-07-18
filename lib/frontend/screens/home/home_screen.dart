@@ -11,6 +11,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import '../../../backend/flicker_api.dart';
+import '../../../backend/entries_api.dart';
 import '../../../backend/notifications_api.dart';
 import '../../router/app_routes.dart';
 import '../../state/diary_store.dart';
@@ -405,6 +406,9 @@ class _HomeScreenState extends State<HomeScreen>
         if (diary != null) {
           FlickerStore.instance.loadFlickerStatus([diary]);
         }
+        // Recover any new_entry (message) events missed during the outage —
+        // the flicker reload above only covers presence, not messages.
+        _recoverMissedEntries(diaryId);
       } else if (type == 'new_entry') {
         final entryId  = event['entry_id']  as String?;
         final authorId = event['author_id'] as String?;
@@ -419,6 +423,45 @@ class _HomeScreenState extends State<HomeScreen>
         }
       }
     } catch (_) {}
+  }
+
+  /// Fetches recent entries for a diary and merges any not already in the store.
+  /// Called after an SSE reconnect to recover new_entry events dropped during the
+  /// outage. Idempotent — existing entries are skipped, so it never duplicates.
+  Future<void> _recoverMissedEntries(String diaryId) async {
+    try {
+      final result = await EntriesApi.instance.listEntries(diaryId);
+      if (!mounted) return;
+      final items = (result['entries'] as List?) ?? [];
+      final myUserId = UserStore.instance.userId;
+      final existingIds =
+          DiaryStore.instance.entriesFor(diaryId).map((e) => e.id).toSet();
+
+      final toAdd = <DiaryEntry>[];
+      for (final raw in items) {
+        final item = raw as Map<String, dynamic>;
+        final id = item['id'] as String;
+        if (existingIds.contains(id)) continue;
+        final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
+        toAdd.add(DiaryEntry(
+          id: id,
+          diaryId: diaryId,
+          isMine: (item['author_id'] as String?) == myUserId,
+          type: item['entry_type'] as String? ?? 'voice',
+          path: '',
+          content: item['content'] as String?,
+          transcript: item['transcription'] as String?,
+          createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
+          durationSeconds: item['duration_seconds'] as int? ?? 0,
+          isExpired: item['is_expired'] as bool? ?? false,
+          savedToMoments: item['saved_to_moments'] as bool? ?? false,
+        ));
+      }
+      if (toAdd.isNotEmpty) DiaryStore.instance.bulkAddEntries(toAdd);
+    } catch (_) {
+      // Best-effort recovery — a failure just means the user sees missed
+      // messages when they next open the thread (which re-fetches).
+    }
   }
 
   /// Handles a real-time new_entry SSE event.

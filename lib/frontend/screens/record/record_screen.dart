@@ -374,9 +374,12 @@ class _RecordScreenState extends State<RecordScreen>
           final localId = '${batchId}_$id';
           try {
             // Step 1: pre-create pending row, get presigned PUT URL.
+            // localId is the stable idempotency key (also used if this gets
+            // queued for retry), so a retry reuses the same server row.
             final reqResult = await EntriesApi.instance.requestUpload(
               connectionId: id,
               entryType:    entryType,
+              clientMsgId:  localId,
             );
 
             // Step 2: PUT bytes directly to B2.

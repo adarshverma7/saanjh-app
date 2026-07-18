@@ -368,9 +368,13 @@ class SendQueueStore extends ChangeNotifier {
         final bytes = await file.readAsBytes();
 
         // Step 1: pre-create pending row, get presigned PUT URL.
+        // pendingLocalId is the stable idempotency key — reusing it means a
+        // retry of a send that already reached the server reuses the same row
+        // instead of creating a duplicate.
         final result = await EntriesApi.instance.requestUpload(
           connectionId: upload.diaryId,
           entryType:    upload.entryType,
+          clientMsgId:  upload.pendingLocalId,
         );
 
         // Step 2: PUT bytes directly to B2.
@@ -448,6 +452,7 @@ class SendQueueStore extends ChangeNotifier {
           connectionId: msg.diaryId,
           content:      msg.content,
           recordedAt:   msg.recordedAt,
+          clientMsgId:  msg.pendingLocalId,
         );
         final entryId = data['id'] as String;
         DiaryStore.instance.markTextSent(msg.pendingLocalId, entryId);
