@@ -413,25 +413,32 @@ class _RecordScreenState extends State<RecordScreen>
           } catch (e) {
             debugPrint('[upload] ${e.runtimeType}: $e');
             if (mounted) setState(() => _uploadProgress = null);
-            hasConnectivityFailure = true;
-            // Queue for retry regardless of error type:
-            // - Connectivity errors (no internet, timeout) → auto-retried on reconnect
-            // - Unknown/SSL errors → retried; permanent failures stay visible with retry btn
-            // - Server errors → retried; user can also tap retry manually
             store.markUploadFailed(localId);
-            await SendQueueStore.instance.enqueue(
-              pendingLocalId:  localId,
-              diaryId:         id,
-              sourcePath:      filePath,
-              entryType:       entryType,
-              fileExt:         fileExt,
-              contentType:     contentType,
-              durationSeconds: effectiveDuration,
-              recordedAt:      sendTime,
-              prompt:          widget.prompt,
-              occasionTag:     widget.occasionTag,
-              parentEntryId:   widget.parentEntryId,
-            );
+            if (_isConnectivityError(e)) {
+              // Genuine offline/timeout — queue for automatic retry on reconnect.
+              hasConnectivityFailure = true;
+              await SendQueueStore.instance.enqueue(
+                pendingLocalId:  localId,
+                diaryId:         id,
+                sourcePath:      filePath,
+                entryType:       entryType,
+                fileExt:         fileExt,
+                contentType:     contentType,
+                durationSeconds: effectiveDuration,
+                recordedAt:      sendTime,
+                prompt:          widget.prompt,
+                occasionTag:     widget.occasionTag,
+                parentEntryId:   widget.parentEntryId,
+              );
+            } else {
+              // Real server/storage error (not connectivity) — surface it
+              // instead of silently looping "will retry when online" forever.
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(_uploadErrorMessage(e))),
+                );
+              }
+            }
           }
         }
       } catch (e) {
@@ -514,6 +521,21 @@ class _RecordScreenState extends State<RecordScreen>
 
     if (!mounted) return;
     context.pop();
+  }
+
+  /// True only for genuine offline/timeout errors that are worth auto-retrying.
+  /// Server (4xx/5xx) and storage (B2 403) errors are NOT connectivity — they
+  /// must surface, not loop in the retry queue.
+  bool _isConnectivityError(Object e) {
+    if (e is SocketException) return true;
+    if (e is DioException) {
+      return e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          (e.type == DioExceptionType.unknown && e.error is SocketException);
+    }
+    return false;
   }
 
   String _uploadErrorMessage(Object e) {

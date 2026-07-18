@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -30,31 +31,48 @@ class EntriesApi {
   }
 
   /// Step 2: upload bytes directly to Backblaze B2 via the presigned PUT URL.
-  /// Uses a bare Dio (no auth interceptor) — the URL is self-contained.
+  ///
+  /// Uses a raw dart:io [HttpClient] rather than Dio on purpose: the presigned
+  /// URL carries an already-encoded AWS SigV4 query string (X-Amz-Credential
+  /// contains %2F, plus the signature), and Dio re-parses/re-encodes the query
+  /// when composing the request, which corrupts the signature and makes B2
+  /// reject every upload with 403. HttpClient sends the parsed [Uri] verbatim,
+  /// so the signature stays intact. (This is why media uploads never worked
+  /// while text — a plain JSON POST with no presigned URL — always did.)
   Future<void> uploadToStorage({
     required String uploadUrl,
     required Uint8List bytes,
     required String contentType,
     void Function(int sent, int total)? onProgress,
   }) async {
-    final storageDio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      sendTimeout: const Duration(seconds: 300), // 5 min for large files
-      receiveTimeout: const Duration(seconds: 60),
-      followRedirects: true,
-      maxRedirects: 3,
-    ));
-    await storageDio.put(
-      uploadUrl,
-      data: bytes,
-      options: Options(
-        contentType: contentType,
-        // Content-Length is set automatically by Dio when body is Uint8List.
-        // No extra headers needed — B2 presigned URLs are self-contained.
-        headers: const <String, dynamic>{},
-      ),
-      onSendProgress: onProgress,
-    );
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 30);
+    try {
+      final req = await client.putUrl(Uri.parse(uploadUrl));
+      req.headers.contentType = ContentType.parse(contentType);
+      req.headers.contentLength = bytes.length;
+
+      // Write in chunks so the caller can drive an upload-progress indicator.
+      const chunk = 64 * 1024;
+      var sent = 0;
+      while (sent < bytes.length) {
+        final end = (sent + chunk) < bytes.length ? sent + chunk : bytes.length;
+        req.add(bytes.sublist(sent, end));
+        sent = end;
+        onProgress?.call(sent, bytes.length);
+      }
+
+      final resp = await req.close();
+      await resp.drain<void>();
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw HttpException(
+          'B2 upload failed with status ${resp.statusCode}',
+          uri: Uri.parse(uploadUrl),
+        );
+      }
+    } finally {
+      client.close(force: true);
+    }
   }
 
   /// Step 3: verify the B2 upload and mark the entry completed.
