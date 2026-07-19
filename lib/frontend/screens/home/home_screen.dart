@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+import '../../../backend/connections_api.dart';
 import '../../../backend/flicker_api.dart';
 import '../../../backend/entries_api.dart';
 import '../../../backend/notifications_api.dart';
@@ -421,6 +422,36 @@ class _HomeScreenState extends State<HomeScreen>
         if (entryId != null && transcription != null && transcription.isNotEmpty) {
           DiaryStore.instance.updateEntryTranscript(entryId, transcription);
         }
+      } else if (type == 'reaction_updated') {
+        final entryId = event['entry_id'] as String?;
+        final raw = event['reactions'] as Map<String, dynamic>? ?? {};
+        if (entryId != null) {
+          DiaryStore.instance.updateEntryReactions(
+            entryId,
+            raw.map((k, v) => MapEntry(k, (v as List).cast<String>())),
+          );
+        }
+      } else if (type == 'entry_deleted') {
+        final entryId = event['entry_id'] as String?;
+        if (entryId != null) DiaryStore.instance.removeEntry(entryId);
+      } else if (type == 'caption_updated') {
+        final entryId = event['entry_id'] as String?;
+        if (entryId != null) {
+          DiaryStore.instance
+              .updateEntryCaption(entryId, event['caption'] as String?);
+        }
+      } else if (type == 'entry_pinned') {
+        final entryId = event['entry_id'] as String?;
+        if (entryId != null) {
+          DiaryStore.instance
+              .setEntryPinned(entryId, event['is_pinned'] == true);
+        }
+      } else if (type == 'partner_recording') {
+        DiaryStore.instance.setPartnerRecording(
+          diaryId,
+          event['is_recording'] == true,
+          (event['entry_type'] as String?) ?? 'voice',
+        );
       }
     } catch (_) {}
   }
@@ -1151,7 +1182,26 @@ class _DiariesTabState extends State<_DiariesTab> {
       confirmLabel: 'Delete',
     );
     if (!confirmed || !mounted) return;
-    for (final id in _selectedIds) { DiaryStore.instance.remove(id); }
+    // Delete on the server first — a local-only remove reappears on the next
+    // sync. Only drop rows the backend actually ended.
+    final failed = <String>[];
+    for (final id in Set<String>.from(_selectedIds)) {
+      try {
+        await ConnectionsApi.instance.deleteConnection(id);
+        DiaryStore.instance.remove(id);
+      } catch (_) {
+        failed.add(id);
+      }
+    }
+    if (!mounted) return;
+    if (failed.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              "Couldn't delete ${failed.length == 1 ? 'one diary' : '${failed.length} diaries'} — check your connection and try again."),
+        ),
+      );
+    }
     _exitSelection();
   }
 

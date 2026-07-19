@@ -70,4 +70,9 @@ class ConnectionsApi {
       'name_for_them': nameForThem,
     });
   }
+
+  /// Ends the connection for both users (server-side soft delete).
+  Future<void> deleteConnection(String connectionId) async {
+    await _dio.delete('/connections/$connectionId');
+  }
 }

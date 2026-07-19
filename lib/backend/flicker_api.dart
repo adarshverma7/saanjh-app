@@ -17,6 +17,18 @@ class FlickerApi {
     return res.data as Map<String, dynamic>;
   }
 
+  /// Fire-and-forget "capturing a memory" signal shown to the partner while
+  /// this user is recording. Failures are swallowed — it's ephemeral.
+  Future<void> signalRecording(
+      String connectionId, bool isRecording, String entryType) async {
+    try {
+      await _dio.post('/connections/$connectionId/recording', data: {
+        'is_recording': isRecording,
+        'entry_type':   entryType,
+      });
+    } catch (_) {/* best-effort */}
+  }
+
   /// SSE event stream for real-time updates. Auto-reconnects on error.
   ///
   /// Emits a synthetic `{"type":"stream_reconnected"}` event on every reconnect

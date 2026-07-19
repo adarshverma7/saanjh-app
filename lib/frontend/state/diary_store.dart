@@ -38,6 +38,13 @@ class DiaryEntry {
   final String? cachedMediaUrl;
   final DateTime? urlExpiresAt; // when cachedMediaUrl becomes stale
 
+  // Messaging-action state (mutable — updated in place via store methods,
+  // synced from the server and over SSE).
+  Map<String, List<String>> emojiReactions; // {emoji: [userId, ...]}
+  String? caption;   // author-set text annotation; media itself is immutable
+  bool isPinned;     // shared pin, either member can toggle
+  String? forwardedFrom; // original entry id when forwarded
+
   DiaryEntry({
     required this.id,
     required this.diaryId,
@@ -60,7 +67,12 @@ class DiaryEntry {
     this.savedToMoments = false,
     this.cachedMediaUrl,
     this.urlExpiresAt,
-  }) : reactions = reactions ?? [];
+    Map<String, List<String>>? emojiReactions,
+    this.caption,
+    this.isPinned = false,
+    this.forwardedFrom,
+  })  : reactions = reactions ?? [],
+        emojiReactions = emojiReactions ?? {};
 
   /// Non-null overrides only — a field can't be reset to null via copyWith.
   DiaryEntry copyWith({
@@ -96,6 +108,10 @@ class DiaryEntry {
       savedToMoments: savedToMoments ?? this.savedToMoments,
       cachedMediaUrl: cachedMediaUrl ?? this.cachedMediaUrl,
       urlExpiresAt: urlExpiresAt ?? this.urlExpiresAt,
+      emojiReactions: emojiReactions,
+      caption: caption,
+      isPinned: isPinned,
+      forwardedFrom: forwardedFrom,
     );
   }
 }
@@ -1032,6 +1048,58 @@ class DiaryStore extends ChangeNotifier {
     _favourites.contains(id)
         ? _favourites.remove(id)
         : _favourites.add(id);
+    notifyListeners();
+  }
+
+  // ── Messaging actions ──────────────────────────────────────────────────────
+
+  /// Partner-is-recording indicator per diary, driven by SSE partner_recording.
+  final Map<String, String> _recordingPartners = {}; // diaryId -> entryType
+  String? recordingType(String diaryId) => _recordingPartners[diaryId];
+
+  void setPartnerRecording(String diaryId, bool isRecording, String type) {
+    if (isRecording) {
+      _recordingPartners[diaryId] = type;
+      // Safety: auto-clear after 30s in case the stop signal is lost.
+      Future.delayed(const Duration(seconds: 30), () {
+        if (_recordingPartners[diaryId] == type) {
+          _recordingPartners.remove(diaryId);
+          notifyListeners();
+        }
+      });
+    } else {
+      _recordingPartners.remove(diaryId);
+    }
+    notifyListeners();
+  }
+
+  DiaryEntry? _findEntry(String entryId) {
+    for (final list in _entries.values) {
+      for (final e in list) {
+        if (e.id == entryId) return e;
+      }
+    }
+    return null;
+  }
+
+  void updateEntryReactions(String entryId, Map<String, List<String>> reactions) {
+    final e = _findEntry(entryId);
+    if (e == null) return;
+    e.emojiReactions = reactions;
+    notifyListeners();
+  }
+
+  void updateEntryCaption(String entryId, String? caption) {
+    final e = _findEntry(entryId);
+    if (e == null) return;
+    e.caption = caption;
+    notifyListeners();
+  }
+
+  void setEntryPinned(String entryId, bool pinned) {
+    final e = _findEntry(entryId);
+    if (e == null) return;
+    e.isPinned = pinned;
     notifyListeners();
   }
 

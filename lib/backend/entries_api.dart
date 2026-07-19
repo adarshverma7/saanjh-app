@@ -142,8 +142,54 @@ class EntriesApi {
     await _dio.patch('/connections/$connectionId/entries/$entryId/played');
   }
 
+  /// Delete for everyone — author-only, within the server's time window.
   Future<void> deleteEntry(String connectionId, String entryId) async {
     await _dio.delete('/connections/$connectionId/entries/$entryId');
+  }
+
+  /// Delete for me — hides the entry from this user only.
+  Future<void> deleteForMe(String connectionId, String entryId) async {
+    await _dio.delete('/connections/$connectionId/entries/$entryId/for-me');
+  }
+
+  /// Toggles this user's emoji reaction. Returns the updated reactions map
+  /// {emoji: [userId, ...]}.
+  Future<Map<String, dynamic>> toggleReaction(
+      String connectionId, String entryId, String emoji) async {
+    final res = await _dio.patch(
+      '/connections/$connectionId/entries/$entryId/reaction',
+      data: {'emoji': emoji},
+    );
+    return (res.data as Map<String, dynamic>)['reactions']
+        as Map<String, dynamic>;
+  }
+
+  /// Pins/unpins an entry in the thread (shared — either member can pin).
+  Future<void> setPinned(
+      String connectionId, String entryId, bool isPinned) async {
+    await _dio.patch(
+      '/connections/$connectionId/entries/$entryId/pin',
+      data: {'is_pinned': isPinned},
+    );
+  }
+
+  /// Sets or clears (null/empty) the caption. Author-only; media is immutable.
+  Future<void> setCaption(
+      String connectionId, String entryId, String? caption) async {
+    await _dio.patch(
+      '/connections/$connectionId/entries/$entryId/caption',
+      data: {'caption': caption},
+    );
+  }
+
+  /// Forwards a memory to another of the user's diaries.
+  Future<Map<String, dynamic>> forwardEntry(
+      String connectionId, String entryId, String toConnectionId) async {
+    final res = await _dio.post(
+      '/connections/$connectionId/entries/$entryId/forward',
+      data: {'to_connection_id': toConnectionId},
+    );
+    return res.data as Map<String, dynamic>;
   }
 
   /// Sends a text message — no upload step needed, content goes directly to the API.

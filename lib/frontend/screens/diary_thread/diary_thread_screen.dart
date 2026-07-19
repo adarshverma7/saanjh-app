@@ -2,6 +2,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +10,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../backend/connections_api.dart';
 import '../../../backend/entries_api.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
@@ -594,7 +596,10 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
           Navigator.pop(context);
           context.push(AppRoutes.occasionPlan);
         },
-        onDelete: _confirmDelete,
+        onDelete: () {
+          Navigator.pop(context); // close the sheet; _confirmDelete pops the thread
+          _confirmDelete();
+        },
         onShareStreak: DiaryStore.instance.streakDays(widget.diaryId) > 0
             ? () {
                 Navigator.pop(context);
@@ -619,7 +624,20 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     );
     if (!confirmed || !mounted) return;
     HapticFeedback.mediumImpact();
-    context.pop();
+    try {
+      await ConnectionsApi.instance.deleteConnection(widget.diaryId);
+      DiaryStore.instance.remove(widget.diaryId);
+      if (!mounted) return;
+      context.pop();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              "Couldn't delete this diary — check your connection and try again."),
+        ),
+      );
+    }
   }
 
   // ── Text messaging ────────────────────────────────────────────────────────
@@ -1047,7 +1065,14 @@ class _ThreadHeader extends StatelessWidget {
                             final weather = ds.weatherState(diaryId);
                             final String label;
                             final Color color;
-                            if (weather == DiaryWeather.quiet) {
+                            final recType =
+                                DiaryStore.instance.recordingType(diaryId);
+                            if (recType != null) {
+                              label = recType == 'video'
+                                  ? '🎥 capturing a memory…'
+                                  : '🎙 capturing a memory…';
+                              color = AppColors.emberBright;
+                            } else if (weather == DiaryWeather.quiet) {
                               label = '🌧 Quiet lately · say something?';
                               color = AppColors.textFaint;
                             } else if (weather == DiaryWeather.clearingUp) {
@@ -2404,10 +2429,149 @@ class _VoiceBubbleContextSheetState extends State<_VoiceBubbleContextSheet> {
     widget.onShowBanner('Transcript copied');
   }
 
-  void _delete() {
+  void _react(String emoji) async {
     Navigator.pop(context);
-    DiaryStore.instance.removeEntry(widget.entry.id);
-    widget.onDelete?.call();
+    HapticFeedback.lightImpact();
+    try {
+      final raw = await EntriesApi.instance
+          .toggleReaction(widget.diaryId, widget.entry.id, emoji);
+      DiaryStore.instance.updateEntryReactions(
+        widget.entry.id,
+        raw.map((k, v) => MapEntry(k, (v as List).cast<String>())),
+      );
+    } catch (_) {
+      widget.onShowBanner("Couldn't react — try again");
+    }
+  }
+
+  void _togglePin() async {
+    Navigator.pop(context);
+    final entry = DiaryStore.instance
+        .entriesFor(widget.diaryId)
+        .cast<DiaryEntry?>()
+        .firstWhere((e) => e?.id == widget.entry.id, orElse: () => null);
+    final next = !(entry?.isPinned ?? false);
+    try {
+      await EntriesApi.instance.setPinned(widget.diaryId, widget.entry.id, next);
+      DiaryStore.instance.setEntryPinned(widget.entry.id, next);
+      widget.onShowBanner(next ? '📌 Pinned' : 'Unpinned');
+    } catch (_) {
+      widget.onShowBanner("Couldn't pin — try again");
+    }
+  }
+
+  void _editCaption() async {
+    final entry = DiaryStore.instance
+        .entriesFor(widget.diaryId)
+        .cast<DiaryEntry?>()
+        .firstWhere((e) => e?.id == widget.entry.id, orElse: () => null);
+    final ctrl = TextEditingController(text: entry?.caption ?? '');
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.modalSurface,
+        title: Text('Caption', style: AppTypography.title(size: 18)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 280,
+          maxLines: 3,
+          style: AppTypography.body(size: 14),
+          decoration: const InputDecoration(
+              hintText: 'Say something about this memory…'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    if (saved == null || !mounted) return;
+    Navigator.pop(context);
+    try {
+      await EntriesApi.instance
+          .setCaption(widget.diaryId, widget.entry.id, saved.isEmpty ? null : saved);
+      DiaryStore.instance
+          .updateEntryCaption(widget.entry.id, saved.isEmpty ? null : saved);
+      widget.onShowBanner('Caption saved');
+    } catch (_) {
+      widget.onShowBanner("Couldn't save caption");
+    }
+  }
+
+  void _forward() async {
+    final others = DiaryStore.instance.diaries
+        .where((d) => d.id != widget.diaryId && !d.isGroup)
+        .toList();
+    if (others.isEmpty) {
+      Navigator.pop(context);
+      widget.onShowBanner('No other diaries to forward to yet');
+      return;
+    }
+    final target = await showModalBottomSheet<DiaryContact>(
+      context: context,
+      backgroundColor: AppColors.modalSurface,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text('Forward to…', style: AppTypography.title(size: 18)),
+            const SizedBox(height: 8),
+            for (final d in others)
+              ListTile(
+                leading: CircleAvatar(child: Text(d.initial)),
+                title:
+                    Text(d.displayName, style: AppTypography.body(size: 15)),
+                onTap: () => Navigator.pop(ctx, d),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (target == null || !mounted) return;
+    Navigator.pop(context);
+    try {
+      await EntriesApi.instance
+          .forwardEntry(widget.diaryId, widget.entry.id, target.id);
+      widget.onShowBanner('↪️ Forwarded to ${target.displayName}');
+    } catch (_) {
+      widget.onShowBanner("Couldn't forward — try again");
+    }
+  }
+
+  void _deleteForMe() async {
+    Navigator.pop(context);
+    try {
+      await EntriesApi.instance.deleteForMe(widget.diaryId, widget.entry.id);
+      DiaryStore.instance.removeEntry(widget.entry.id);
+      widget.onDelete?.call();
+    } catch (_) {
+      widget.onShowBanner("Couldn't delete — try again");
+    }
+  }
+
+  void _delete() async {
+    Navigator.pop(context);
+    try {
+      await EntriesApi.instance.deleteEntry(widget.diaryId, widget.entry.id);
+      DiaryStore.instance.removeEntry(widget.entry.id);
+      widget.onDelete?.call();
+    } on DioException catch (e) {
+      final code = (e.response?.data is Map)
+          ? ((e.response!.data as Map)['error']?['code'] ??
+              (e.response!.data as Map)['error'])
+          : null;
+      widget.onShowBanner(code.toString().contains('DELETE_WINDOW')
+          ? 'Too late to delete for everyone — use "Delete for me"'
+          : "Couldn't delete — try again");
+    } catch (_) {
+      widget.onShowBanner("Couldn't delete — try again");
+    }
   }
 
   @override
@@ -2448,12 +2612,56 @@ class _VoiceBubbleContextSheetState extends State<_VoiceBubbleContextSheet> {
               ),
               const SizedBox(height: 20),
 
+              // Emoji reactions — one per user, tap again to remove
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    for (final e in const ['❤️', '😂', '😮', '😢', '🙏', '🔥'])
+                      GestureDetector(
+                        onTap: () => _react(e),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withValues(alpha: 0.05),
+                          ),
+                          child: Text(e, style: const TextStyle(fontSize: 22)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
               // Save / remove jar
               _SheetRow(
                 icon: _isJarred ? Icons.star_rounded : Icons.star_outline_rounded,
                 iconColor: AppColors.emberWarm,
                 label: _isJarred ? '✓ Saved · Remove from Jar' : '✨ Save to Memory Jar',
                 onTap: _toggleJar,
+              ),
+
+              // Pin / unpin
+              _SheetRow(
+                icon: Icons.push_pin_outlined,
+                label: '📌 Pin in this diary',
+                onTap: _togglePin,
+              ),
+
+              // Caption (author only — media itself is never editable)
+              if (widget.entry.isMine)
+                _SheetRow(
+                  icon: Icons.notes_rounded,
+                  label: '✍️ Add / edit caption',
+                  onTap: _editCaption,
+                ),
+
+              // Forward to another diary
+              _SheetRow(
+                icon: Icons.forward_rounded,
+                label: '↪️ Forward to another diary',
+                onTap: _forward,
               ),
 
               // Share
@@ -2481,12 +2689,21 @@ class _VoiceBubbleContextSheetState extends State<_VoiceBubbleContextSheet> {
                   onTap: _copyTranscript,
                 ),
 
-              // Delete (isMine only)
+              // Delete for me — hides from this user only
+              _SheetRow(
+                icon: Icons.visibility_off_outlined,
+                iconColor: AppColors.destructive,
+                label: 'Delete for me',
+                labelColor: AppColors.destructive,
+                onTap: _deleteForMe,
+              ),
+
+              // Delete for everyone (author only, within the server window)
               if (widget.entry.isMine)
                 _SheetRow(
                   icon: Icons.delete_outline_rounded,
                   iconColor: AppColors.destructive,
-                  label: 'Delete',
+                  label: 'Delete for everyone',
                   labelColor: AppColors.destructive,
                   onTap: _delete,
                 ),

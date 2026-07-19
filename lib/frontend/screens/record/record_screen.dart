@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../backend/entries_api.dart';
+import '../../../backend/flicker_api.dart';
 import '../../services/share_card_service.dart';
 import '../../services/transcription_service.dart';
 import '../../state/diary_store.dart';
@@ -195,7 +196,16 @@ class _RecordScreenState extends State<RecordScreen>
 
   // ─── Voice recording ──────────────────────────────────────────
 
+  /// Ephemeral "capturing a memory" indicator for the partner (SSE, best-effort).
+  void _signalRecording(bool on) {
+    final target = widget.targetDiaryId;
+    if (target == null) return;
+    FlickerApi.instance.signalRecording(
+        target, on, _mode == _Mode.voice ? 'voice' : 'video');
+  }
+
   Future<void> _startVoice() async {
+    _signalRecording(true);
     try {
       final dir = await getTemporaryDirectory();
       final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
@@ -224,6 +234,7 @@ class _RecordScreenState extends State<RecordScreen>
   Future<void> _startVideo() async {
     if (_camCtrl == null || !_camReady) return;
     HapticFeedback.mediumImpact();
+    _signalRecording(true);
     try {
       await _camCtrl!.startVideoRecording();
       _elapsed = 0;
@@ -243,6 +254,7 @@ class _RecordScreenState extends State<RecordScreen>
     _pulseCtrl.stop();
     _waveCtrl.stop();
     HapticFeedback.lightImpact();
+    _signalRecording(false);
 
     if (_mode == _Mode.voice) {
       try {
