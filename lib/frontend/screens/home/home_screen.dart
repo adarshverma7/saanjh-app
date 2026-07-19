@@ -453,6 +453,31 @@ class _HomeScreenState extends State<HomeScreen>
           event['is_recording'] == true,
           (event['entry_type'] as String?) ?? 'voice',
         );
+      } else if (type == 'entry_incoming') {
+        // Fast delivery: the partner just STARTED sending — show the memory
+        // immediately as an arriving placeholder. The upcoming new_entry event
+        // (same id) upgrades it in place once media is playable.
+        final entryId = event['entry_id'] as String?;
+        final entryType = (event['entry_type'] as String?) ?? 'voice';
+        if (entryId != null &&
+            !DiaryStore.instance
+                .entriesFor(diaryId)
+                .any((e) => e.id == entryId)) {
+          DiaryStore.instance.addEntry(DiaryEntry(
+            id: entryId,
+            diaryId: diaryId,
+            isMine: false,
+            type: entryType,
+            path: '',
+            createdAt: DateTime.now(),
+            isPending: true, // renders as "arriving" until media lands
+          ));
+          DiaryStore.instance.updateSnippet(
+            diaryId,
+            entryType == 'video' ? '🎬 Arriving…' : '🎙 Arriving…',
+            '',
+          );
+        }
       }
     } catch (_) {}
   }
@@ -504,9 +529,16 @@ class _HomeScreenState extends State<HomeScreen>
   void _onNewEntryReceived(String diaryId, Map<String, dynamic> event) {
     if (!mounted) return;
     final entryId = event['entry_id'] as String;
-    // Dedup: ignore if already in the store (e.g. arrived via polling first).
-    if (DiaryStore.instance.entriesFor(diaryId).any((e) => e.id == entryId)) {
-      return;
+    // Dedup: if already present as a completed entry (e.g. polling won the
+    // race) skip; if present as a fast-delivery "arriving" placeholder,
+    // remove it so the playable version below replaces it in place.
+    final existing = DiaryStore.instance
+        .entriesFor(diaryId)
+        .cast<DiaryEntry?>()
+        .firstWhere((e) => e?.id == entryId, orElse: () => null);
+    if (existing != null) {
+      if (!existing.isPending) return;
+      DiaryStore.instance.removeEntry(entryId);
     }
 
     final myUserId  = UserStore.instance.userId;
