@@ -14,6 +14,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../../backend/entries_api.dart';
 import '../../../backend/flicker_api.dart';
+import '../../services/media_cache_service.dart';
 import '../../services/share_card_service.dart';
 import '../../services/transcription_service.dart';
 import '../../state/diary_store.dart';
@@ -421,6 +422,11 @@ class _RecordScreenState extends State<RecordScreen>
             // Replace pending entry with the pre-created backend ID.
             store.markUploadComplete(localId, reqResult.entryId);
             anySendSucceeded = true;
+
+            // Keep the recording on-device so it replays instantly from the
+            // media cache instead of ever being re-downloaded.
+            MediaCacheService.instance
+                .adoptLocalRecording(reqResult.entryId, entryType, filePath);
 
             TranscriptionService.instance.transcribeFile(filePath).then((t) {
               if (t != null) store.updateEntryTranscript(reqResult.entryId, t);

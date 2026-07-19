@@ -9,6 +9,7 @@ import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../services/media_cache_service.dart';
 import '../../widgets/cta.dart';
 import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_dialog.dart';
@@ -23,6 +24,20 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _notifVoiceNotes = true;
+  bool _autoDownload = true;
+  String _mediaCacheSize = 'Calculating…';
+
+  Future<void> _refreshCacheSize() async {
+    final bytes = await MediaCacheService.instance.totalSizeBytes();
+    final auto = await MediaCacheService.instance.autoDownloadEnabled;
+    if (!mounted) return;
+    setState(() {
+      _autoDownload = auto;
+      _mediaCacheSize = bytes < 1024 * 1024
+          ? '${(bytes / 1024).toStringAsFixed(0)} KB used'
+          : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB used';
+    });
+  }
   bool _notifReminders = true;
   bool _notifOnThisDay = true;
   String _language = 'English';
@@ -32,6 +47,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _refreshCacheSize();
     SharedPreferences.getInstance().then((prefs) {
       if (mounted) {
         setState(() => _pulseTapMode = prefs.getBool('pulse_tap_mode') ?? false);
@@ -469,6 +485,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     delay: const Duration(milliseconds: 100),
                     child: const _FreeBanner(),
                   ),
+                  const SizedBox(height: 24),
+                  _SectionLabel('STORAGE'),
+                  const SizedBox(height: 10),
+                  _SettingsGroup(items: [
+                    _SettingsTile(
+                      icon: Icons.download_rounded,
+                      label: 'Auto-download memories',
+                      sub: _autoDownload ? 'On — plays instantly' : 'Off — downloads on play',
+                      onTap: () async {
+                        final next = !_autoDownload;
+                        await MediaCacheService.instance.setAutoDownload(next);
+                        if (mounted) setState(() => _autoDownload = next);
+                      },
+                    ),
+                    _SettingsTile(
+                      icon: Icons.cleaning_services_rounded,
+                      label: 'Clear downloaded media',
+                      sub: _mediaCacheSize,
+                      onTap: () async {
+                        HapticFeedback.selectionClick();
+                        await MediaCacheService.instance.clear();
+                        await _refreshCacheSize();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text('Downloaded media cleared — memories re-download on play.')));
+                        }
+                      },
+                    ),
+                  ]),
                   const SizedBox(height: 24),
                   _SectionLabel('PREFERENCES'),
                   const SizedBox(height: 10),

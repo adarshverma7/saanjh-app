@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backend/entries_api.dart';
+import '../services/media_cache_service.dart';
 import '../../backend/flicker_api.dart';
 import '../../backend/notifications_api.dart';
 import 'diary_store.dart';
@@ -393,6 +394,11 @@ class SendQueueStore extends ChangeNotifier {
         );
 
         DiaryStore.instance.markUploadComplete(upload.pendingLocalId, result.entryId);
+
+        // Adopt into the media cache before deleting the temp recording, so
+        // queued-offline sends also replay from disk forever.
+        await MediaCacheService.instance.adoptLocalRecording(
+            result.entryId, upload.entryType, upload.filePath);
 
         _uploads.remove(upload);
         await _persistUploads(prefs);

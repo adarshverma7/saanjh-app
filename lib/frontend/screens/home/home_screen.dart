@@ -27,6 +27,7 @@ import '../../theme/app_typography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/home_widget_service.dart';
+import '../../services/media_cache_service.dart';
 import '../../services/morning_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/occasion_service.dart';
@@ -532,6 +533,13 @@ class _HomeScreenState extends State<HomeScreen>
     );
 
     DiaryStore.instance.addEntry(entry);
+
+    // Offline-first prefetch: pull the media into the local cache in the
+    // background while the signed URL is fresh, so first play is instant
+    // and works offline. Respects the auto-download preference.
+    if (mediaUrl != null && entryType != 'text') {
+      MediaCacheService.instance.prefetch(entryId, entryType, mediaUrl);
+    }
 
     // Update the home-screen card preview so the contact list reflects the
     // latest message without waiting for the next poll.

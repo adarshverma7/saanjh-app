@@ -21,6 +21,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
 import '../../services/audio_analysis_service.dart';
+import '../../services/media_cache_service.dart';
 import '../../services/share_card_service.dart';
 import '../../widgets/milestone_share_card.dart';
 import '../../widgets/motion/saanjh_skeleton.dart';
@@ -390,6 +391,9 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
         ));
       }
       DiaryStore.instance.bulkAddEntries(toAdd);
+      // Cursor for on-demand older pages (scroll-up pagination).
+      _nextCursor = result['next_cursor'] as String?;
+      _hasMoreOlder = result['has_more'] as bool? ?? false;
     } catch (_) {
       // Network failure — show whatever is already in the store.
     } finally {
@@ -400,10 +404,60 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     }
   }
 
+  String? _nextCursor;
+  bool _hasMoreOlder = false;
+  bool _loadingOlder = false;
+
+  /// Scroll-up pagination: fetches the next (older) page on demand. Merges by
+  /// id, so cached and freshly-synced entries never duplicate.
+  Future<void> _loadOlderEntries() async {
+    if (_loadingOlder || !_hasMoreOlder || _nextCursor == null) return;
+    _loadingOlder = true;
+    try {
+      final result = await EntriesApi.instance
+          .listEntries(widget.diaryId, cursor: _nextCursor);
+      final items = (result['entries'] as List?) ?? [];
+      final myUserId = UserStore.instance.userId;
+      final existingIds = DiaryStore.instance
+          .entriesFor(widget.diaryId)
+          .map((e) => e.id)
+          .toSet();
+      final toAdd = <DiaryEntry>[];
+      for (final raw in items) {
+        final item = raw as Map<String, dynamic>;
+        final id = item['id'] as String;
+        if (existingIds.contains(id)) continue;
+        final dateStr = (item['recorded_at'] ?? item['created_at']) as String?;
+        toAdd.add(DiaryEntry(
+          id: id,
+          diaryId: widget.diaryId,
+          isMine: (item['author_id'] as String?) == myUserId,
+          type: item['entry_type'] as String? ?? 'voice',
+          path: '',
+          content: item['content'] as String?,
+          transcript: item['transcription'] as String?,
+          createdAt: dateStr != null ? DateTime.parse(dateStr) : DateTime.now(),
+          durationSeconds: item['duration_seconds'] as int? ?? 0,
+          isExpired: item['is_expired'] as bool? ?? false,
+          savedToMoments: item['saved_to_moments'] as bool? ?? false,
+        ));
+      }
+      DiaryStore.instance.bulkAddEntries(toAdd);
+      _nextCursor = result['next_cursor'] as String?;
+      _hasMoreOlder = result['has_more'] as bool? ?? false;
+    } catch (_) {
+      // Offline — the user keeps whatever is cached.
+    } finally {
+      _loadingOlder = false;
+    }
+  }
+
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
     final max = _scrollCtrl.position.maxScrollExtent;
     if (max <= 0) return;
+    // Near the top (oldest visible) → pull the next older page on demand.
+    if (_scrollCtrl.offset < 200) _loadOlderEntries();
     // Newest messages are at the BOTTOM (offset = max = 0.0 fraction = present/warm).
     // Scrolling UP reveals older messages → fraction approaches 1.0 = past/cooler.
     final fraction = (1.0 - _scrollCtrl.offset / max).clamp(0.0, 1.0);
@@ -446,15 +500,16 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
     final entry = _entries[idx];
     if (!entry.isMine) DiaryStore.instance.markListened(entry.id);
 
-    // ── Resolve playback source ──────────────────────────────────────────
-    // Local path: use it directly.
-    // No path (backend entry): fetch a 1-hour signed URL from the backend.
+    // ── Resolve playback source (offline-first) ──────────────────────────
+    // 1. Local recording path (just sent from this device).
+    // 2. Media cache — downloads at most once, then plays from disk forever.
     String? playSource = entry.path.isNotEmpty ? entry.path : null;
     if (playSource == null) {
-      try {
-        final data = await EntriesApi.instance.getEntry(widget.diaryId, entry.id);
-        playSource = data['media_url'] as String?;
-      } catch (_) {}
+      playSource = await MediaCacheService.instance.resolve(
+        diaryId: widget.diaryId,
+        entryId: entry.id,
+        type: entry.type == _EntryType.video ? 'video' : 'voice',
+      );
       if (!mounted) return;
     }
 
@@ -3002,12 +3057,15 @@ class _VideoBubbleState extends State<_VideoBubble> {
       return;
     }
 
-    // Remote entry: fetch a fresh signed URL from the backend.
+    // Remote entry: offline-first — cached file if present, else download
+    // exactly once into the media cache and play from disk.
     setState(() => _loading = true);
     try {
-      final data =
-          await EntriesApi.instance.getEntry(widget.diaryId, widget.entry.id);
-      final url = data['media_url'] as String?;
+      final url = await MediaCacheService.instance.resolve(
+        diaryId: widget.diaryId,
+        entryId: widget.entry.id,
+        type: 'video',
+      );
       if (!mounted) return;
       if (url == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

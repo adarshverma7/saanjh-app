@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backend/api_client.dart';
 import '../../backend/auth_api.dart';
+import '../services/media_cache_service.dart';
 import '../theme/app_colors.dart';
 import 'diary_store.dart';
 
@@ -114,6 +115,10 @@ class UserStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kName);
     await ApiClient.instance.clearTokens();
+    // Sign-out wipes the offline cache: entries + downloaded media. It is
+    // rebuilt by syncing from the backend after the next login.
+    await DiaryStore.instance.clearEntryCache();
+    await MediaCacheService.instance.clear();
     DiaryStore.instance.reset();
     notifyListeners();
   }

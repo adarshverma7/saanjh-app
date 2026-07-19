@@ -1,4 +1,5 @@
-﻿import 'dart:convert';
+﻿import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -73,6 +74,49 @@ class DiaryEntry {
     this.forwardedFrom,
   })  : reactions = reactions ?? [],
         emojiReactions = emojiReactions ?? {};
+
+  /// Compact JSON for the on-device entry cache (offline-first open).
+  /// Media paths are intentionally excluded — MediaCacheService owns files.
+  Map<String, dynamic> toCacheJson() => {
+        'id': id,
+        'd': diaryId,
+        'm': isMine,
+        't': type,
+        if (content != null) 'c': content,
+        if (transcript != null) 'tr': transcript,
+        'at': createdAt.millisecondsSinceEpoch,
+        'ds': durationSeconds,
+        if (isExpired) 'ex': true,
+        if (listenedAt != null) 'la': listenedAt!.millisecondsSinceEpoch,
+        if (savedToMoments) 'sm': true,
+        if (emojiReactions.isNotEmpty) 'er': emojiReactions,
+        if (caption != null) 'cap': caption,
+        if (isPinned) 'pin': true,
+        if (forwardedFrom != null) 'ff': forwardedFrom,
+      };
+
+  static DiaryEntry fromCacheJson(Map<String, dynamic> j) => DiaryEntry(
+        id: j['id'] as String,
+        diaryId: j['d'] as String,
+        isMine: j['m'] as bool? ?? false,
+        type: j['t'] as String? ?? 'voice',
+        path: '',
+        content: j['c'] as String?,
+        transcript: j['tr'] as String?,
+        createdAt:
+            DateTime.fromMillisecondsSinceEpoch(j['at'] as int? ?? 0),
+        durationSeconds: j['ds'] as int? ?? 0,
+        isExpired: j['ex'] as bool? ?? false,
+        listenedAt: j['la'] != null
+            ? DateTime.fromMillisecondsSinceEpoch(j['la'] as int)
+            : null,
+        savedToMoments: j['sm'] as bool? ?? false,
+        emojiReactions: (j['er'] as Map<String, dynamic>?)
+            ?.map((k, v) => MapEntry(k, (v as List).cast<String>())),
+        caption: j['cap'] as String?,
+        isPinned: j['pin'] as bool? ?? false,
+        forwardedFrom: j['ff'] as String?,
+      );
 
   /// Non-null overrides only — a field can't be reset to null via copyWith.
   DiaryEntry copyWith({
@@ -213,6 +257,7 @@ class DiaryContact {
 class DiaryStore extends ChangeNotifier {
   DiaryStore._() {
     // Load cached contacts instantly so the first paint shows real data.
+    loadCachedEntries();
     _loadCachedContacts().then((_) {
       if (_isLoading && _diaries.isNotEmpty) {
         _isLoading = false;
@@ -472,14 +517,94 @@ class DiaryStore extends ChangeNotifier {
 
   void addEntry(DiaryEntry entry) {
     _entries.putIfAbsent(entry.diaryId, () => []).add(entry);
+    _schedulePersistEntries(entry.diaryId);
     notifyListeners();
   }
 
   void bulkAddEntries(List<DiaryEntry> entries) {
     for (final e in entries) {
       _entries.putIfAbsent(e.diaryId, () => []).add(e);
+      _schedulePersistEntries(e.diaryId);
     }
     if (entries.isNotEmpty) notifyListeners();
+  }
+
+  // ── Entry cache (offline-first) ────────────────────────────────────────────
+  // Completed entries are persisted per diary so a chat opens instantly from
+  // disk; the backend is then consulted only for incremental changes.
+
+  static const _kEntriesCachePrefix = 'entries_cache_v1_';
+  static const _entriesCacheCap = 200; // newest N entries kept per diary
+  final Set<String> _dirtyEntryDiaries = {};
+  Timer? _persistDebounce;
+  bool _entriesCacheLoaded = false;
+
+  void _schedulePersistEntries(String diaryId) {
+    _dirtyEntryDiaries.add(diaryId);
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(seconds: 1), () async {
+      final dirty = Set<String>.from(_dirtyEntryDiaries);
+      _dirtyEntryDiaries.clear();
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        for (final id in dirty) {
+          final list = (_entries[id] ?? [])
+              .where((e) => !e.isPending && !e.isFailed)
+              .toList()
+            ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          final tail = list.length > _entriesCacheCap
+              ? list.sublist(list.length - _entriesCacheCap)
+              : list;
+          await prefs.setString('$_kEntriesCachePrefix$id',
+              jsonEncode(tail.map((e) => e.toCacheJson()).toList()));
+        }
+      } catch (_) {/* cache write is best-effort */}
+    });
+  }
+
+  void _persistAllDirtyNow() {
+    for (final id in _entries.keys) {
+      _schedulePersistEntries(id);
+    }
+  }
+
+  /// Loads every diary's cached entries from disk. Called once at startup so
+  /// threads render instantly; later backend syncs merge on top by id.
+  Future<void> loadCachedEntries() async {
+    if (_entriesCacheLoaded) return;
+    _entriesCacheLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var restored = false;
+      for (final key in prefs.getKeys()) {
+        if (!key.startsWith(_kEntriesCachePrefix)) continue;
+        final diaryId = key.substring(_kEntriesCachePrefix.length);
+        if (_entries[diaryId]?.isNotEmpty == true) continue;
+        final raw = prefs.getString(key);
+        if (raw == null) continue;
+        final list = (jsonDecode(raw) as List)
+            .map((j) => DiaryEntry.fromCacheJson(j as Map<String, dynamic>))
+            .toList();
+        if (list.isNotEmpty) {
+          _entries[diaryId] = list;
+          restored = true;
+        }
+      }
+      if (restored) notifyListeners();
+    } catch (_) {/* corrupt cache — server sync rebuilds it */}
+  }
+
+  /// Removes all cached entries (sign-out). Media files are cleared separately
+  /// by MediaCacheService.clear().
+  Future<void> clearEntryCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith(_kEntriesCachePrefix)) await prefs.remove(key);
+      }
+    } catch (_) {}
+    _entries.clear();
+    _entriesCacheLoaded = false;
   }
 
   void markListened(String entryId) {
@@ -488,6 +613,7 @@ class DiaryStore extends ChangeNotifier {
         if (e.id == entryId) {
           final isFirstListen = e.listenedAt == null;
           e.listenedAt = DateTime.now();
+          _schedulePersistEntries(e.diaryId);
           notifyListeners();
           // Fire receipt signal only for sent notes getting their first listen.
           if (isFirstListen && e.isMine) {
@@ -541,6 +667,7 @@ class DiaryStore extends ChangeNotifier {
     for (final list in _entries.values) {
       list.removeWhere((e) => e.id == entryId);
     }
+    _persistAllDirtyNow();
     notifyListeners();
   }
 
@@ -891,6 +1018,7 @@ class DiaryStore extends ChangeNotifier {
           final m = now.minute.toString().padLeft(2, '0');
           final period = now.hour >= 12 ? 'PM' : 'AM';
           updateSnippet(old.diaryId, snippet, '$h:$m $period');
+          _schedulePersistEntries(old.diaryId);
           return;
         }
       }
@@ -1086,6 +1214,7 @@ class DiaryStore extends ChangeNotifier {
     final e = _findEntry(entryId);
     if (e == null) return;
     e.emojiReactions = reactions;
+    _schedulePersistEntries(e.diaryId);
     notifyListeners();
   }
 
@@ -1093,6 +1222,7 @@ class DiaryStore extends ChangeNotifier {
     final e = _findEntry(entryId);
     if (e == null) return;
     e.caption = caption;
+    _schedulePersistEntries(e.diaryId);
     notifyListeners();
   }
 
@@ -1100,6 +1230,7 @@ class DiaryStore extends ChangeNotifier {
     final e = _findEntry(entryId);
     if (e == null) return;
     e.isPinned = pinned;
+    _schedulePersistEntries(e.diaryId);
     notifyListeners();
   }
 
