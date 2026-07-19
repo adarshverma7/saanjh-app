@@ -76,6 +76,9 @@ class AuthApi {
         'device_type': deviceInfo.deviceType,
         'app_version': '1.0.0',
       });
+      // Persist the device_id used for this session — token refresh must
+      // send the same value or the backend rejects it.
+      await ApiClient.instance.saveDeviceId(deviceInfo.deviceId);
       return AuthResult.fromJson(res.data as Map<String, dynamic>);
     } on DioException {
       return null;

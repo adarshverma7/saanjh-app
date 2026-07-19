@@ -23,12 +23,14 @@ class FlickerApi {
   /// (not on initial connect) so FlickerStore can re-fetch authoritative state
   /// for any events missed during the disconnect window.
   Stream<String> subscribeToEvents(String connectionId) async* {
-    final token = await ApiClient.instance.accessToken;
     final url = '$kApiBaseUrl/connections/$connectionId/events';
 
     bool hasConnected = false;
     while (true) {
       try {
+        // Re-read on every (re)connect — the token rotates on refresh, and a
+        // stale one makes every reconnect 401 silently.
+        final token = await ApiClient.instance.accessToken;
         final res = await _dio.get<ResponseBody>(
           url,
           options: Options(
