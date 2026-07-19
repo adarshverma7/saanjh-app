@@ -737,7 +737,7 @@ class _DiaryThreadScreenState extends State<DiaryThreadScreen>
                           child: ThreadSkeleton(),
                         )
                       : _entries.isEmpty
-                          ? _EmptyThread()
+                          ? _EmptyThread(diaryId: widget.diaryId)
                           : ListView(
                           controller: _scrollCtrl,
                           padding:
@@ -1205,6 +1205,9 @@ class _IconBtn extends StatelessWidget {
 // ─── Empty thread state ───────────────────────────────────────────────────────
 
 class _EmptyThread extends StatefulWidget {
+  final String diaryId;
+  const _EmptyThread({required this.diaryId});
+
   @override
   State<_EmptyThread> createState() => _EmptyThreadState();
 }
@@ -1274,6 +1277,7 @@ class _EmptyThreadState extends State<_EmptyThread> {
                       'isVideo': false,
                       'autoStart': true,
                       'prompt': _prompts[i],
+                      'targetDiaryId': widget.diaryId,
                     },
                   ),
                 ),
@@ -1861,7 +1865,10 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                                   onPlayAgain: widget.onTap,
                                   onRecordBack: () => context.push(
                                     AppRoutes.voiceRecord,
-                                    extra: {'isVideo': false},
+                                    extra: {
+                                      'isVideo': false,
+                                      'targetDiaryId': widget.diaryId,
+                                    },
                                   ),
                                 )
                               : _BubbleBody(
@@ -3475,8 +3482,11 @@ class _BottomActionBarState extends State<_BottomActionBar>
                               },
                               onLongPress: () {
                                 HapticFeedback.mediumImpact();
-                                context.push(AppRoutes.voiceRecord,
-                                    extra: {'isVideo': false, 'autoStart': true});
+                                context.push(AppRoutes.voiceRecord, extra: {
+                                  'isVideo': false,
+                                  'autoStart': true,
+                                  'targetDiaryId': widget.diaryId,
+                                });
                               },
                               child: AnimatedScale(
                                 scale: _pillPressed ? 0.97 : 1.0,

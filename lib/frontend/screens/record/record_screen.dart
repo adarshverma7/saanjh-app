@@ -318,6 +318,8 @@ class _RecordScreenState extends State<RecordScreen>
         ? widget.broadcastTo!
         : (widget.targetDiaryId != null ? [widget.targetDiaryId!] : <String>[]);
 
+    var anySendSucceeded = false;
+
     if (filePath != null && targets.isNotEmpty) {
       // ── Upload to backend (optimistic: show pending immediately) ───────────
       setState(() => _isSending = true);
@@ -406,6 +408,7 @@ class _RecordScreenState extends State<RecordScreen>
 
             // Replace pending entry with the pre-created backend ID.
             store.markUploadComplete(localId, reqResult.entryId);
+            anySendSucceeded = true;
 
             TranscriptionService.instance.transcribeFile(filePath).then((t) {
               if (t != null) store.updateEntryTranscript(reqResult.entryId, t);
@@ -465,6 +468,16 @@ class _RecordScreenState extends State<RecordScreen>
         );
       }
     } else {
+      // A recording exists but there is nowhere to send it — a navigation bug
+      // (missing targetDiaryId). Surface it loudly instead of dropping the
+      // note on the floor with no feedback.
+      if (filePath != null && targets.isEmpty && !widget.isPrivateReflection) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't send — no recipient selected. Please reopen the chat and try again."),
+          ),
+        );
+      }
       // Local-only fallback (no file recorded or no targets).
       final snippet = _mode == _Mode.voice ? '🎙 Voice note' : '🎬 Video clip';
       for (final id in targets) {
@@ -492,7 +505,11 @@ class _RecordScreenState extends State<RecordScreen>
     // ── Share moment trigger ──────────────────────────────────────────────
     // Show a share sheet on the 1st send ever and every 10th send thereafter.
     // Only for top-level shared entries (not reactions, not private).
-    final isShareable = widget.parentEntryId == null && targets.isNotEmpty;
+    // Celebrate only when something actually went out — showing the share
+    // sheet after a failed send blocks the pop() and strands the user on the
+    // preview screen.
+    final isShareable =
+        widget.parentEntryId == null && targets.isNotEmpty && anySendSucceeded;
     if (isShareable) {
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;

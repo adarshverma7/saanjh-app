@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../router/app_routes.dart';
+import '../../state/diary_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/app_typography.dart';
@@ -38,7 +39,13 @@ class _FirstSendScreenState extends State<FirstSendScreen>
 
   Future<void> _record() async {
     HapticFeedback.mediumImpact();
-    context.push(AppRoutes.voiceRecord);
+    // Target the newest diary — without a targetDiaryId the recording is
+    // silently discarded by RecordScreen.
+    final diaries = DiaryStore.instance.diaries;
+    context.push(AppRoutes.voiceRecord, extra: {
+      'isVideo': false,
+      if (diaries.isNotEmpty) 'targetDiaryId': diaries.first.id,
+    });
   }
 
   Future<void> _skip() async {
