@@ -9,6 +9,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/app_shadows.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_empty_state.dart';
 
 // ─── Category ─────────────────────────────────────────────────────────────────
@@ -121,16 +122,21 @@ class _PeopleScreenState extends State<PeopleScreen> {
               SliverSafeArea(
                 bottom: false,
                 sliver: SliverToBoxAdapter(
-                  child: _Header(isEmbedded: widget.isEmbedded),
+                  child: SaanjhReveal(
+                    child: _Header(isEmbedded: widget.isEmbedded),
+                  ),
                 ),
               ),
               if (all.isNotEmpty)
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-                    child: _SearchField(
-                      controller: _searchCtrl,
-                      onChanged: (v) => setState(() => _query = v.trim()),
+                    child: SaanjhReveal(
+                      delay: const Duration(milliseconds: 60),
+                      child: _SearchField(
+                        controller: _searchCtrl,
+                        onChanged: (v) => setState(() => _query = v.trim()),
+                      ),
                     ),
                   ),
                 ),
@@ -155,13 +161,16 @@ class _PeopleScreenState extends State<PeopleScreen> {
                   sliver: SliverList(
                     delegate: SliverChildListDelegate([
                       if (_query.isEmpty) ...[
-                        _QuickActions(
-                          onGroup:
-                              () => context.push(AppRoutes.createGroup),
-                          onOccasion:
-                              () => context.push(AppRoutes.occasionPlan),
-                          onInvite:
-                              () => context.push(AppRoutes.inviteRecipient),
+                        SaanjhReveal(
+                          delay: const Duration(milliseconds: 110),
+                          child: _QuickActions(
+                            onGroup:
+                                () => context.push(AppRoutes.createGroup),
+                            onOccasion:
+                                () => context.push(AppRoutes.occasionPlan),
+                            onInvite:
+                                () => context.push(AppRoutes.inviteRecipient),
+                          ),
                         ),
                         const SizedBox(height: 28),
                       ],
@@ -175,12 +184,15 @@ class _PeopleScreenState extends State<PeopleScreen> {
                             count: grouped[cat]!.length,
                           ),
                           const SizedBox(height: 10),
-                          for (final d in grouped[cat]!)
-                            _PersonTile(
-                              contact: d,
-                              onTap: () => context.push(
-                                AppRoutes.diaryThread,
-                                extra: {'diaryId': d.id},
+                          for (final (i, d) in grouped[cat]!.indexed)
+                            SaanjhReveal.staggered(
+                              index: i + 3,
+                              child: _PersonTile(
+                                contact: d,
+                                onTap: () => context.push(
+                                  AppRoutes.diaryThread,
+                                  extra: {'diaryId': d.id},
+                                ),
                               ),
                             ),
                           const SizedBox(height: 24),
@@ -195,10 +207,13 @@ class _PeopleScreenState extends State<PeopleScreen> {
                           count: groups.length,
                         ),
                         const SizedBox(height: 10),
-                        for (final d in groups)
-                          _PersonTile(
-                            contact: d,
-                            onTap: () => context.push(AppRoutes.groupThread),
+                        for (final (i, d) in groups.indexed)
+                          SaanjhReveal.staggered(
+                            index: i + 3,
+                            child: _PersonTile(
+                              contact: d,
+                              onTap: () => context.push(AppRoutes.groupThread),
+                            ),
                           ),
                         const SizedBox(height: 24),
                       ],

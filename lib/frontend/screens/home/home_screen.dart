@@ -3630,7 +3630,7 @@ class _BottomNav extends StatelessWidget {
     ('Me',       Icons.person_outline_rounded,      Icons.person_rounded,        false),
   ];
 
-  static const _dockH      = 62.0;
+  static const _dockH      = 66.0; // icon zone + label zone; 62 clipped labels
   static const _iconZoneH  = 44.0; // upper zone — pill lives here
   static const _pillW      = 48.0;
   static const _pillH      = 34.0; // icon-only height (label zone is below)

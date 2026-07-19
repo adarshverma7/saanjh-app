@@ -10,6 +10,7 @@ import '../../theme/app_typography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../widgets/cta.dart';
+import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -459,9 +460,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _ProfileCard(onEdit: _editProfile),
+                  SaanjhReveal(
+                    delay: const Duration(milliseconds: 40),
+                    child: _ProfileCard(onEdit: _editProfile),
+                  ),
                   const SizedBox(height: 20),
-                  const _FreeBanner(),
+                  SaanjhReveal(
+                    delay: const Duration(milliseconds: 100),
+                    child: const _FreeBanner(),
+                  ),
                   const SizedBox(height: 24),
                   _SectionLabel('PREFERENCES'),
                   const SizedBox(height: 10),

@@ -18,6 +18,7 @@ import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/cta.dart';
 import '../../widgets/milestone_share_card.dart';
+import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_dialog.dart';
 
 class MeScreen extends StatefulWidget {
@@ -88,7 +89,9 @@ class _MeScreenState extends State<MeScreen> {
               SliverSafeArea(
                 bottom: false,
                 sliver: SliverToBoxAdapter(
-                  child: _Header(isEmbedded: widget.isEmbedded),
+                  child: SaanjhReveal(
+                    child: _Header(isEmbedded: widget.isEmbedded),
+                  ),
                 ),
               ),
               SliverToBoxAdapter(
@@ -101,24 +104,36 @@ class _MeScreenState extends State<MeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // ─── Avatar hero ──────────────────────────────────────
-                      _ProfileHero(
-                        onEdit: () => context.push(AppRoutes.profile),
+                      SaanjhReveal(
+                        delay: const Duration(milliseconds: 50),
+                        child: _ProfileHero(
+                          onEdit: () => context.push(AppRoutes.profile),
+                        ),
                       ),
 
                       const SizedBox(height: 20),
 
                       // ─── Live stats ───────────────────────────────────────
-                      const _ProfileStats(),
+                      SaanjhReveal(
+                        delay: const Duration(milliseconds: 110),
+                        child: const _ProfileStats(),
+                      ),
 
                       const SizedBox(height: 16),
 
                       // ─── My Journal entry point ───────────────────────────
-                      const _JournalCard(),
+                      SaanjhReveal(
+                        delay: const Duration(milliseconds: 170),
+                        child: const _JournalCard(),
+                      ),
 
                       const SizedBox(height: 16),
 
                       // ─── Free forever card ────────────────────────────────
-                      const _FreeCard(),
+                      SaanjhReveal(
+                        delay: const Duration(milliseconds: 230),
+                        child: const _FreeCard(),
+                      ),
 
                       const SizedBox(height: 24),
 

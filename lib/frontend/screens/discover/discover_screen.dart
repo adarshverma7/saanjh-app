@@ -14,6 +14,7 @@ import '../../theme/app_typography.dart';
 import '../../widgets/cta.dart';
 import '../../widgets/glow_background.dart';
 import '../../widgets/saanjh_logo.dart';
+import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_shimmer.dart';
 
 enum _DiscoverState { checking, permissionNeeded, permissionDenied, loading, loaded }
@@ -551,19 +552,25 @@ class _ContactsView extends StatelessWidget {
 
         return Column(
           children: [
-            _ContactsHeader(),
+            SaanjhReveal(child: _ContactsHeader()),
             Expanded(
               child: ListView(
                 padding: EdgeInsets.fromLTRB(
                     20, 0, 20, MediaQuery.of(context).padding.bottom + 110),
                 physics: const BouncingScrollPhysics(),
                 children: [
-                  _SearchBar(
-                    query: searchQuery,
-                    onChanged: onSearchChanged,
+                  SaanjhReveal(
+                    delay: const Duration(milliseconds: 60),
+                    child: _SearchBar(
+                      query: searchQuery,
+                      onChanged: onSearchChanged,
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  _PrivacyNote(),
+                  SaanjhReveal(
+                    delay: const Duration(milliseconds: 100),
+                    child: _PrivacyNote(),
+                  ),
                   const SizedBox(height: 18),
                   if (noResults) ...[
                     const SizedBox(height: 24),
@@ -578,13 +585,16 @@ class _ContactsView extends StatelessWidget {
                         _EmptySection(
                             text: 'Everyone here is already in your diaries.')
                       else
-                        for (final c in filteredSaanjh)
-                          _PersonTile(
-                            contact: c,
-                            inDiary: false,
-                            onSaanjh: true,
-                            isConnecting: connecting.contains(c.phone),
-                            onTap: () => onStartDiary(c),
+                        for (final (i, c) in filteredSaanjh.indexed)
+                          SaanjhReveal.staggered(
+                            index: i + 3,
+                            child: _PersonTile(
+                              contact: c,
+                              inDiary: false,
+                              onSaanjh: true,
+                              isConnecting: connecting.contains(c.phone),
+                              onTap: () => onStartDiary(c),
+                            ),
                           ),
                     ],
                     if (onSaanjh.isEmpty && searchQuery.isEmpty)
@@ -594,12 +604,15 @@ class _ContactsView extends StatelessWidget {
                       _SectionLabel('INVITE TO SAANJH',
                           count: filteredInvite.length),
                       const SizedBox(height: 10),
-                      for (final c in filteredInvite)
-                        _PersonTile(
-                          contact: c,
-                          inDiary: false,
-                          onSaanjh: false,
-                          onTap: () => onInvite(c),
+                      for (final (i, c) in filteredInvite.indexed)
+                        SaanjhReveal.staggered(
+                          index: i + 4,
+                          child: _PersonTile(
+                            contact: c,
+                            inDiary: false,
+                            onSaanjh: false,
+                            onTap: () => onInvite(c),
+                          ),
                         ),
                     ],
                   ],

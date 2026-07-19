@@ -40,6 +40,7 @@ import '../screens/welcome_home/welcome_home_screen.dart';
 import '../screens/me/me_screen.dart';
 import '../state/user_store.dart';
 import 'app_routes.dart';
+import 'saanjh_transitions.dart';
 
 // All routes accessible WITHOUT being logged in.
 // Includes the full pre-login onboarding flow.
@@ -87,49 +88,49 @@ class AppRouter {
         path: AppRoutes.onboardingIntro,
         name: 'intro',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: OnboardingIntroScreen()),
+            const SaanjhPage(child: OnboardingIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.preCommit,
         name: 'preCommit',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: PreCommitScreen()),
+            const SaanjhPage(child: PreCommitScreen()),
       ),
       GoRoute(
         path: AppRoutes.relationshipSelect,
         name: 'relationshipSelect',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: RelationshipSelectScreen()),
+            const SaanjhPage(child: RelationshipSelectScreen()),
       ),
       GoRoute(
         path: AppRoutes.phoneNumber,
         name: 'phone',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: PhoneNumberScreen()),
+            const SaanjhPage(child: PhoneNumberScreen()),
       ),
       GoRoute(
         path: AppRoutes.otpVerify,
         name: 'otp',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: OtpVerifyScreen()),
+            const SaanjhPage(child: OtpVerifyScreen()),
       ),
       GoRoute(
         path: AppRoutes.nameEntry,
         name: 'name',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: NameEntryScreen()),
+            const SaanjhPage(child: NameEntryScreen()),
       ),
       GoRoute(
         path: AppRoutes.inviteRecipient,
         name: 'inviteRecipient',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: InviteRecipientScreen()),
+            const SaanjhPage(child: InviteRecipientScreen()),
       ),
       GoRoute(
         path: AppRoutes.welcomeHome,
         name: 'welcome',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: WelcomeHomeScreen()),
+            const SaanjhPage(child: WelcomeHomeScreen()),
       ),
       GoRoute(
         path: AppRoutes.home,
@@ -140,19 +141,19 @@ class AppRouter {
         path: AppRoutes.connectFirst,
         name: 'connectFirst',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: ConnectFirstScreen()),
+            const SaanjhPage(child: ConnectFirstScreen()),
       ),
       GoRoute(
         path: AppRoutes.invite,
         name: 'invite',
-        pageBuilder: (_, s) => const MaterialPage(child: InviteScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: InviteScreen()),
       ),
       GoRoute(
         path: AppRoutes.inviteAccept,
         name: 'inviteAccept',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: InviteAcceptScreen(
+          return SaanjhPage(child: InviteAcceptScreen(
             inviterName: extra['inviterName'] as String? ?? '',
             inviterId:   extra['inviterId']   as String? ?? '',
           ));
@@ -162,20 +163,20 @@ class AppRouter {
         path: AppRoutes.createGroup,
         name: 'createGroup',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: CreateGroupScreen()),
+            const SaanjhPage(child: CreateGroupScreen()),
       ),
       GoRoute(
         path: AppRoutes.memoryTree,
         name: 'memoryTree',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: MemoryTreeScreen()),
+            const SaanjhPage(child: MemoryTreeScreen()),
       ),
       GoRoute(
         path: AppRoutes.diaryThread,
         name: 'diaryThread',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: DiaryThreadScreen(
+          return SaanjhPage(child: DiaryThreadScreen(
             diaryId: extra['diaryId'] as String? ?? '',
           ));
         },
@@ -183,14 +184,14 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.settings,
         name: 'settings',
-        pageBuilder: (_, s) => const MaterialPage(child: SettingsScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: SettingsScreen()),
       ),
       GoRoute(
         path: AppRoutes.voiceRecord,
         name: 'record',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: RecordScreen(
+          return SaanjhModalPage(child: RecordScreen(
             isVideo: extra['isVideo'] as bool? ?? false,
             autoStart: extra['autoStart'] as bool? ?? false,
             broadcastTo: (extra['broadcastTo'] as List?)?.cast<String>(),
@@ -207,31 +208,31 @@ class AppRouter {
       GoRoute(
         path: AppRoutes.family,
         name: 'family',
-        pageBuilder: (_, s) => const MaterialPage(child: FamilyScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: FamilyScreen()),
       ),
       GoRoute(
         path: AppRoutes.memoryDetail,
         name: 'memoryDetail',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: MemoryDetailScreen()),
+            const SaanjhPage(child: MemoryDetailScreen()),
       ),
       GoRoute(
         path: AppRoutes.occasionPlan,
         name: 'occasion',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: OccasionPlanScreen()),
+            const SaanjhPage(child: OccasionPlanScreen()),
       ),
       GoRoute(
         path: AppRoutes.profile,
         name: 'profile',
-        pageBuilder: (_, s) => const MaterialPage(child: ProfileScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: ProfileScreen()),
       ),
       GoRoute(
         path: AppRoutes.groupThread,
         name: 'groupThread',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: GroupThreadScreen(
+          return SaanjhPage(child: GroupThreadScreen(
             diaryId: extra['diaryId'] as String?,
           ));
         },
@@ -240,30 +241,30 @@ class AppRouter {
         path: AppRoutes.firstSend,
         name: 'firstSend',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: FirstSendScreen()),
+            const SaanjhPage(child: FirstSendScreen()),
       ),
       GoRoute(
         path: AppRoutes.discover,
         name: 'discover',
-        pageBuilder: (_, s) => const MaterialPage(child: DiscoverScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: DiscoverScreen()),
       ),
       GoRoute(
         path: AppRoutes.memoryBook,
         name: 'memoryBook',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: MemoryBookScreen()),
+            const SaanjhPage(child: MemoryBookScreen()),
       ),
       GoRoute(
         path: AppRoutes.wish,
         name: 'wish',
-        pageBuilder: (_, s) => const MaterialPage(child: WishScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: WishScreen()),
       ),
       GoRoute(
         path: AppRoutes.flicker,
         name: 'flicker',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: FlickerScreen(
+          return SaanjhPage(child: FlickerScreen(
             targetDiaryId: extra['targetDiaryId'] as String?,
           ));
         },
@@ -273,7 +274,7 @@ class AppRouter {
         name: 'streak',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: StreakMilestoneScreen(
+          return SaanjhModalPage(child: StreakMilestoneScreen(
             diaryId:     extra['diaryId']     as String? ?? '',
             contactName: extra['contactName'] as String? ?? '',
             milestone:   extra['milestone']   as int?    ?? 7,
@@ -285,7 +286,7 @@ class AppRouter {
         name: 'anniversary',
         pageBuilder: (_, s) {
           final extra = s.extra as Map<String, dynamic>? ?? {};
-          return MaterialPage(child: AnniversaryScreen(
+          return SaanjhPage(child: AnniversaryScreen(
             diaryId:     extra['diaryId']     as String? ?? '',
             contactName: extra['contactName'] as String? ?? '',
             years:       extra['years']       as int?    ?? 1,
@@ -296,29 +297,29 @@ class AppRouter {
         path: AppRoutes.onThisDay,
         name: 'onThisDay',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: OnThisDayScreen()),
+            const SaanjhPage(child: OnThisDayScreen()),
       ),
       GoRoute(
         path: AppRoutes.memoryJar,
         name: 'memoryJar',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: MemoryJarScreen()),
+            const SaanjhPage(child: MemoryJarScreen()),
       ),
       GoRoute(
         path: AppRoutes.people,
         name: 'people',
-        pageBuilder: (_, s) => const MaterialPage(child: PeopleScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: PeopleScreen()),
       ),
       GoRoute(
         path: AppRoutes.personalJournal,
         name: 'journal',
         pageBuilder: (_, s) =>
-            const MaterialPage(child: PersonalJournalScreen()),
+            const SaanjhPage(child: PersonalJournalScreen()),
       ),
       GoRoute(
         path: '/me',
         name: 'me',
-        pageBuilder: (_, s) => const MaterialPage(child: MeScreen()),
+        pageBuilder: (_, s) => const SaanjhPage(child: MeScreen()),
       ),
     ],
   );
