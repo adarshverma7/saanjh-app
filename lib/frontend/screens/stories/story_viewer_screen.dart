@@ -851,7 +851,7 @@ class _ViewersSheetState extends State<_ViewersSheet> {
                 ),
               )
             else if (_viewers!.isEmpty)
-              Text('No flickers yet — check back soon.',
+              Text('No views yet — check back soon.',
                   style: AppTypography.body(color: Colors.white54))
             else
               Flexible(
@@ -897,8 +897,11 @@ class _ViewersSheetState extends State<_ViewersSheet> {
                                 style: AppTypography.body(
                                     size: 15, color: Colors.white)),
                           ),
-                          const Icon(Icons.favorite_rounded,
-                              size: 14, color: AppColors.emberWarm),
+                          // Deliberately not a heart: a heart means a Flicker,
+                          // and viewing a story is not one.
+                          Icon(Icons.visibility_rounded,
+                              size: 14,
+                              color: Colors.white.withValues(alpha: 0.4)),
                         ],
                       ),
                     );

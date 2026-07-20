@@ -20,6 +20,7 @@ import '../../state/flicker_store.dart';
 import '../../state/send_queue_store.dart';
 import '../../state/story_store.dart';
 import '../../widgets/flicker_received_overlay.dart';
+import '../../widgets/flicker_story_avatar.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
@@ -389,7 +390,17 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final event = json.decode(rawJson) as Map<String, dynamic>;
       final type = event['type'] as String?;
-      if (type == 'flicker_received') {
+      if (type == 'flicker_state') {
+        // Canonical relationship state — the server sends the same computation
+        // to both users, so this alone keeps the two devices identical. The
+        // older flicker_received / mutual_reveal events below remain as a
+        // fallback for whichever arrives first.
+        FlickerStore.instance.handleSseFlickerState(
+          diaryId: diaryId,
+          partnerName: contactName,
+          event: event,
+        );
+      } else if (type == 'flicker_received') {
         FlickerStore.instance.handleSseFlickerReceived(
           diaryId: diaryId,
           personName: event['sender_name'] as String? ?? contactName,
@@ -1415,9 +1426,12 @@ class _FlickerStrip extends StatelessWidget {
     );
   }
 
-  /// Partner with an active story → story ring (orange unviewed, green +
-  /// heart once flickered) opening the viewer; otherwise the classic
-  /// flicker chip opening the flicker screen.
+  /// One circle in the strip. Story and Flicker are rendered as two separate
+  /// rings and driven by two separate stores — a story view never affects the
+  /// Flicker ring or heart badge, and a Flicker never marks a story seen.
+  ///
+  /// Tap  → open the story (or the flicker screen when there is no story).
+  /// Hold → send a Flicker after three seconds.
   Widget _buildDiaryChip(
     BuildContext context,
     DiaryContact contact,
@@ -1427,25 +1441,37 @@ class _FlickerStrip extends StatelessWidget {
     final group = contact.partnerUserId != null
         ? storyStore.groupForUser(contact.partnerUserId!)
         : null;
-    if (group != null && !group.isSelf) {
-      return _FlickerAvatarChip(
-        contact: contact,
-        store: ps,
-        storyGroup: group,
-        onTap: () => _openStoryViewer(context, group),
-      );
-    }
-    return _FlickerAvatarChip(
-      contact: contact,
-      store: ps,
+    final hasStory = group != null && !group.isSelf;
+
+    return FlickerStoryAvatar(
+      key: ValueKey('chip-${contact.id}'),
+      initial: contact.initial,
+      avatarColor: contact.avatarColor,
+      avatarUrl: hasStory ? group.avatarUrl : null,
+      label: contact.name.split(' ').first,
+      storyState: !hasStory
+          ? StoryRingState.none
+          : group.allViewed
+              ? StoryRingState.seen
+              : StoryRingState.unseen,
+      flickerState: _flickerStateFor(ps, contact.id),
       onTap: () {
         HapticFeedback.selectionClick();
-        context.push(
-          AppRoutes.flicker,
-          extra: {'targetDiaryId': contact.id},
-        );
+        if (hasStory) {
+          _openStoryViewer(context, group);
+        } else {
+          context.push(AppRoutes.flicker, extra: {'targetDiaryId': contact.id});
+        }
       },
+      onFlicker: () => ps.sendFlicker(contact.id, contact.name),
     );
+  }
+
+  static FlickerRingState _flickerStateFor(FlickerStore ps, String diaryId) {
+    if (ps.isMutualToday(diaryId)) return FlickerRingState.mutual;
+    if (ps.hasMeFlickeredToday(diaryId)) return FlickerRingState.iSent;
+    if (ps.hasThemFlickeredToday(diaryId)) return FlickerRingState.theySent;
+    return FlickerRingState.none;
   }
 
   List<DiaryContact> _filtered() {
@@ -1564,7 +1590,10 @@ class _FlickerStrip extends StatelessWidget {
                   if (searchQuery.isEmpty && selfGroup != null)
                     _YourStoryChip(
                       group: selfGroup,
-                      onTap: () => _openStoryViewer(context, selfGroup),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        _openStoryViewer(context, selfGroup);
+                      },
                     ),
                   for (final c in [...withStory, ...withViewedStory, ...plain])
                     _buildDiaryChip(context, c, ps, storyStore),
@@ -1582,181 +1611,6 @@ class _FlickerStrip extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _FlickerAvatarChip extends StatelessWidget {
-  final DiaryContact contact;
-  final FlickerStore store;
-  final VoidCallback onTap;
-  final StoryGroup? storyGroup; // active story → ring shows story state
-
-  const _FlickerAvatarChip({
-    required this.contact,
-    required this.store,
-    required this.onTap,
-    this.storyGroup,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final received = store.receivedToday(contact.id);
-    final mePulsed = store.hasMeFlickeredToday(contact.id);
-    final mutual = received != null && mePulsed;
-    final receivedNotSent = received != null && !mePulsed;
-    final streakDays = DiaryStore.instance.streakDays(contact.id);
-    final storyViewed = storyGroup?.allViewed ?? false;
-
-    final Color ringColor;
-    final double ringAlpha;
-    if (storyGroup != null) {
-      // Story ring wins: orange until flickered, then green + tiny heart.
-      ringColor = storyViewed ? AppColors.successGreen : AppColors.emberWarm;
-      ringAlpha = 0.95;
-    } else if (mutual) {
-      ringColor = AppColors.successGreen;
-      ringAlpha = 0.72;
-    } else if (receivedNotSent) {
-      ringColor = AppColors.emberWarm;
-      ringAlpha = 0.90;
-    } else if (streakDays > 0) {
-      ringColor = AppColors.emberWarm;
-      ringAlpha = 0.28;
-    } else {
-      ringColor = Colors.white;
-      ringAlpha = 0.10;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(right: 18),
-      child: GestureDetector(
-        onTap: onTap,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [
-                        contact.avatarColor,
-                        contact.avatarColor.withValues(alpha: 0.68),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    border: Border.all(
-                      color: ringColor.withValues(alpha: ringAlpha),
-                      width: storyGroup != null ? 2.4 : 2,
-                    ),
-                    image: storyGroup?.avatarUrl != null
-                        ? DecorationImage(
-                            image: NetworkImage(storyGroup!.avatarUrl!),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
-                    boxShadow: ringAlpha > 0.3
-                        ? [
-                            BoxShadow(
-                              color: ringColor.withValues(alpha: ringAlpha * 0.45),
-                              blurRadius: 10,
-                              spreadRadius: 1,
-                            ),
-                          ]
-                        : null,
-                  ),
-                  child: storyGroup?.avatarUrl != null
-                      ? null
-                      : Center(
-                          child: mePulsed && !mutual && storyGroup == null
-                              ? Icon(
-                                  Icons.favorite_rounded,
-                                  size: 18,
-                                  color: Colors.white.withValues(alpha: 0.55),
-                                )
-                              : Text(
-                                  contact.initial,
-                                  style:
-                                      AppTypography.title(size: 17).copyWith(
-                                    color: Colors.white,
-                                    fontStyle: FontStyle.italic,
-                                  ),
-                                ),
-                        ),
-                ),
-                // Viewed story: tiny heart on the bottom-right of the ring
-                if (storyGroup != null && storyViewed)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.successGreen,
-                        border: Border.all(color: AppColors.ink, width: 1.5),
-                      ),
-                      child: const Icon(Icons.favorite_rounded,
-                          size: 9, color: Colors.white),
-                    ),
-                  ),
-                // Incoming pulse dot
-                if (receivedNotSent && storyGroup == null)
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      width: 13,
-                      height: 13,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.emberWarm,
-                        border:
-                            Border.all(color: AppColors.ink, width: 1.5),
-                        boxShadow: AppShadows.dotGlow(intensity: 0.7),
-                      ),
-                    ),
-                  ),
-                // Mutual check
-                if (mutual && storyGroup == null)
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      width: 15,
-                      height: 15,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.successGreen,
-                        border: Border.all(color: AppColors.ink, width: 1.5),
-                      ),
-                      child: const Icon(Icons.favorite_rounded,
-                          size: 8, color: Colors.white),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 5),
-            Text(
-              contact.name.split(' ').first,
-              style: AppTypography.label(
-                size: 10.5,
-                color: receivedNotSent
-                    ? AppColors.emberBright
-                    : Colors.white.withValues(alpha: 0.35),
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

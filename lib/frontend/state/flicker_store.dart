@@ -60,6 +60,13 @@ class _RelState {
   final DateTime? theirSentAt;
   final bool receivedOverlayShown; // persisted: overlay fires exactly once per day
   final bool mutualOverlayShown;   // persisted: mutual overlay fires exactly once per day
+  /// Server state version (max sent_at epoch ms of the pair). Lets a late SSE
+  /// event be dropped instead of overwriting fresher server truth.
+  final int version;
+  /// True while an optimistic local send has not been confirmed by the server.
+  /// Reconciliation leaves unconfirmed sends alone so a slow network doesn't
+  /// make the user's own tap flicker off and back on.
+  final bool pendingSend;
 
   const _RelState({
     required this.dateKey,
@@ -68,6 +75,8 @@ class _RelState {
     this.theirSentAt,
     this.receivedOverlayShown = false,
     this.mutualOverlayShown = false,
+    this.version = 0,
+    this.pendingSend = false,
   });
 
   bool get iSent    => mySentAt    != null;
@@ -80,6 +89,8 @@ class _RelState {
     DateTime? theirSentAt,
     bool? receivedOverlayShown,
     bool? mutualOverlayShown,
+    int? version,
+    bool? pendingSend,
   }) =>
       _RelState(
         dateKey:              dateKey,
@@ -88,6 +99,28 @@ class _RelState {
         theirSentAt:          theirSentAt          ?? this.theirSentAt,
         receivedOverlayShown: receivedOverlayShown ?? this.receivedOverlayShown,
         mutualOverlayShown:   mutualOverlayShown   ?? this.mutualOverlayShown,
+        version:              version              ?? this.version,
+        pendingSend:          pendingSend          ?? this.pendingSend,
+      );
+
+  /// Replaces the timestamps outright with server truth — including clearing
+  /// them. copyWith cannot express "set this back to null", which is why a
+  /// failed optimistic send used to stick around until the next day.
+  _RelState withServerTimestamps({
+    required DateTime? mySentAt,
+    required DateTime? theirSentAt,
+    required int version,
+    String? partnerName,
+  }) =>
+      _RelState(
+        dateKey:              dateKey,
+        partnerName:          partnerName ?? this.partnerName,
+        mySentAt:             mySentAt,
+        theirSentAt:          theirSentAt,
+        receivedOverlayShown: receivedOverlayShown,
+        mutualOverlayShown:   mutualOverlayShown,
+        version:              version,
+        pendingSend:          false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -97,6 +130,7 @@ class _RelState {
         if (theirSentAt != null)    'ts': theirSentAt!.toIso8601String(),
         if (receivedOverlayShown)   'ro': true,
         if (mutualOverlayShown)     'mo': true,
+        if (version != 0)           'v':  version,
       };
 
   factory _RelState.fromJson(Map<String, dynamic> j) => _RelState(
@@ -106,6 +140,7 @@ class _RelState {
         theirSentAt: j['ts'] != null ? DateTime.tryParse(j['ts'] as String) : null,
         receivedOverlayShown: j['ro'] as bool? ?? false,
         mutualOverlayShown:   j['mo'] as bool? ?? false,
+        version:     j['v'] as int? ?? 0,
       );
 }
 
@@ -278,27 +313,15 @@ class FlickerStore extends ChangeNotifier {
 
   void sendFlicker(String diaryId, String partnerName) {
     if (!windowOpen) return;
-    // Optimistic: record sent time immediately.
+    // Optimistic: show it immediately, flagged pending so reconciliation won't
+    // wipe it while the request is still in flight.
     // Idempotent: s.mySentAt ?? now preserves any existing timestamp.
     _transition(diaryId, (s) => s.copyWith(
       partnerName: partnerName,
       mySentAt: s.mySentAt ?? DateTime.now(),
+      pendingSend: true,
     ));
-    FlickerApi.instance.sendFlicker(diaryId).then((res) {
-      final partnerAlreadyToday =
-          res['partner_flickered_today'] == true || res['is_mutual'] == true;
-      if (partnerAlreadyToday) {
-        _applyTheirFlicker(diaryId, partnerName, DateTime.now());
-      }
-      // Safety net: if SSE mutual_reveal was missed but API confirmed mutual.
-      if (res['is_mutual'] == true) {
-        _maybeMutualOverlay(diaryId, partnerName, DateTime.now());
-      }
-    }).catchError((Object e) {
-      if (_isConnectivityError(e)) {
-        SendQueueStore.instance.enqueueFlicker(diaryId);
-      }
-    });
+    _confirmSend(diaryId, partnerName);
   }
 
   void sendFlickerToMany(List<String> diaryIds, List<String> names) {
@@ -310,22 +333,42 @@ class FlickerStore extends ChangeNotifier {
       _transition(id, (s) => s.copyWith(
         partnerName: name,
         mySentAt: s.mySentAt ?? now,
+        pendingSend: true,
       ));
-      FlickerApi.instance.sendFlicker(id).then((res) {
-        final partnerAlreadyToday =
-            res['partner_flickered_today'] == true || res['is_mutual'] == true;
-        if (partnerAlreadyToday) {
-          _applyTheirFlicker(id, name, DateTime.now());
-        }
-        if (res['is_mutual'] == true) {
-          _maybeMutualOverlay(id, name, DateTime.now());
-        }
-      }).catchError((Object e) {
-        if (_isConnectivityError(e)) {
-          SendQueueStore.instance.enqueueFlicker(id);
-        }
-      });
+      _confirmSend(id, name);
     }
+  }
+
+  /// Sends to the server and adopts the confirmed state it returns, so the
+  /// optimistic guess is always replaced by the same truth the partner sees.
+  void _confirmSend(String diaryId, String partnerName) {
+    FlickerApi.instance.sendFlicker(diaryId).then((res) {
+      final isMutual = res['is_mutual'] == true;
+      final partnerAlreadyToday =
+          res['partner_flickered_today'] == true || isMutual;
+
+      _transition(diaryId, (s) => s.copyWith(pendingSend: false));
+
+      // Server confirmed the partner's side — apply it even if the SSE event
+      // never arrived (offline, backgrounded, dropped stream).
+      if (partnerAlreadyToday) {
+        _applyTheirFlicker(diaryId, partnerName, DateTime.now());
+      }
+      if (isMutual) {
+        _maybeMutualOverlay(diaryId, partnerName, DateTime.now());
+      }
+    }).catchError((Object e) {
+      if (_isConnectivityError(e)) {
+        // Queued for retry — keep the optimistic state pending so it survives
+        // reconciliation until the queued send actually lands.
+        SendQueueStore.instance.enqueueFlicker(diaryId);
+      } else {
+        // The server rejected it (rate limit, dead connection). Clear pending
+        // so the next reconcile can correct the UI instead of showing a
+        // flicker the partner will never see.
+        _transition(diaryId, (s) => s.copyWith(pendingSend: false));
+      }
+    });
   }
 
   // ── State rehydration ─────────────────────────────────────────────────────
@@ -344,22 +387,87 @@ class FlickerStore extends ChangeNotifier {
 
   Future<void> _loadOneStatus(DiaryContact diary) async {
     try {
-      final res   = await FlickerApi.instance.getFlickerStatus(diary.id);
-      final myAt  = _parseIfToday(res['my_last_flicker_at']      as String?);
-      final theirAt = _parseIfToday(res['partner_last_flicker_at'] as String?);
-
-      if (myAt != null) {
-        _transition(diary.id, (s) => s.copyWith(
-          partnerName: diary.name,
-          mySentAt: s.mySentAt ?? myAt,
-        ));
-      }
-      if (theirAt != null) {
-        _applyTheirFlicker(diary.id, diary.name, theirAt);
-      }
+      final res = await FlickerApi.instance.getFlickerStatus(diary.id);
+      applyServerState(
+        diaryId: diary.id,
+        partnerName: diary.name,
+        mySentAtRaw: res['my_last_flicker_at'] as String?,
+        theirSentAtRaw: res['partner_last_flicker_at'] as String?,
+      );
     } catch (_) {
       // Partial failures are fine — other connections still update.
     }
+  }
+
+  // ── Authoritative reconciliation ──────────────────────────────────────────
+
+  /// Adopts the backend's canonical state for one connection wholesale.
+  ///
+  /// This is the only path that may *clear* a timestamp, which is what keeps
+  /// the two devices identical: previously the client could only ever add
+  /// flickers, so an optimistic send that never reached the server (or state
+  /// left over from another device) stayed on screen for the rest of the day
+  /// while the partner saw nothing.
+  ///
+  /// Both SSE `flicker_state` and the status poll funnel through here, so a
+  /// poll can never disagree with an event — the server derives both from one
+  /// computation.
+  void applyServerState({
+    required String diaryId,
+    required String partnerName,
+    required String? mySentAtRaw,
+    required String? theirSentAtRaw,
+    int version = 0,
+  }) {
+    final before = _base(diaryId);
+
+    // Drop events that raced past fresher state we already hold.
+    if (version != 0 && before.version > version) return;
+
+    final myAt = _parseIfToday(mySentAtRaw);
+    final theirAt = _parseIfToday(theirSentAtRaw);
+
+    // An in-flight local send is not yet visible to the server; keep showing it
+    // rather than letting the user's own tap blink off and back on.
+    final keepOptimistic = before.pendingSend && myAt == null;
+
+    _transition(diaryId, (s) => s.withServerTimestamps(
+      partnerName: partnerName.isNotEmpty ? partnerName : null,
+      mySentAt: keepOptimistic ? s.mySentAt : myAt,
+      theirSentAt: theirAt,
+      version: version != 0 ? version : s.version,
+    ));
+
+    if (keepOptimistic) {
+      _transition(diaryId, (s) => s.copyWith(pendingSend: true));
+    }
+
+    final after = _base(diaryId);
+
+    // Overlays fire on real transitions only, so reconciliation is silent when
+    // nothing actually changed.
+    if (!before.isMutual && after.isMutual) {
+      _maybeMutualOverlay(diaryId, partnerName, after.theirSentAt ?? DateTime.now());
+    } else if (!before.theySent && after.theySent) {
+      _maybeReceivedOverlay(diaryId, partnerName, after.theirSentAt!);
+    }
+  }
+
+  /// Called by HomeScreen when the canonical SSE `flicker_state` arrives.
+  /// Both users receive this from the same server-side computation, so mutual
+  /// appears on both devices at the same moment.
+  void handleSseFlickerState({
+    required String diaryId,
+    required String partnerName,
+    required Map<String, dynamic> event,
+  }) {
+    applyServerState(
+      diaryId: diaryId,
+      partnerName: partnerName,
+      mySentAtRaw: event['my_last_flicker_at'] as String?,
+      theirSentAtRaw: event['partner_last_flicker_at'] as String?,
+      version: (event['version'] as num?)?.toInt() ?? 0,
+    );
   }
 
   // ── SSE fast-path handlers ────────────────────────────────────────────────
