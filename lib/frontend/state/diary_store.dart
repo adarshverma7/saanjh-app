@@ -177,6 +177,7 @@ class DiaryContact {
   final String lastTime;
   final String customLabel; // user-set display name override (e.g. "Papa")
   final String? profileVoiceNotePath; // path to recorded introduction note
+  final String? partnerUserId; // partner's user id — links stories to this diary
 
   // ── 8-colour user-selectable palette ──────────────────────────────────────
 
@@ -221,6 +222,7 @@ class DiaryContact {
     this.lastTime = 'Now',
     this.customLabel = '',
     this.profileVoiceNotePath,
+    this.partnerUserId,
   }) : _baseAvatarColor = avatarColor;
 
   DiaryContact copyWith({
@@ -231,6 +233,7 @@ class DiaryContact {
     String? profileVoiceNotePath,
     List<DiaryContact>? members,
     String? elderMemberId,
+    String? partnerUserId,
   }) {
     return DiaryContact(
       id: id,
@@ -248,6 +251,7 @@ class DiaryContact {
       customLabel: customLabel ?? this.customLabel,
       profileVoiceNotePath:
           profileVoiceNotePath ?? this.profileVoiceNotePath,
+      partnerUserId: partnerUserId ?? this.partnerUserId,
     );
   }
 }
@@ -868,6 +872,15 @@ class DiaryStore extends ChangeNotifier {
             }
             changed = true;
           }
+          // Backfill partner user id on contacts restored from an older cache.
+          final pid = partner['id'] as String?;
+          if (pid != null) {
+            final idx = _diaries.indexWhere((d) => d.id == id);
+            if (idx >= 0 && _diaries[idx].partnerUserId == null) {
+              _diaries[idx] = _diaries[idx].copyWith(partnerUserId: pid);
+              changed = true;
+            }
+          }
           continue;
         }
 
@@ -882,6 +895,7 @@ class DiaryStore extends ChangeNotifier {
           phone: partner['phone'] as String? ?? '',
           initial: initial,
           avatarColor: color,
+          partnerUserId: partner['id'] as String?,
         ));
 
         if (streak > 0) {
@@ -923,6 +937,7 @@ class DiaryStore extends ChangeNotifier {
         'initial':    d.initial,
         'colorIndex': d.avatarColorIndex,
         'customLabel': d.customLabel,
+        'partnerUserId': d.partnerUserId,
       }).toList();
       await prefs.setString(_kContactsCache, jsonEncode(list));
 
@@ -969,6 +984,7 @@ class DiaryStore extends ChangeNotifier {
           avatarColor:    color,
           avatarColorIndex: colorIndex,
           customLabel:    m['customLabel'] as String? ?? '',
+          partnerUserId:  m['partnerUserId'] as String?,
         ));
       }
 

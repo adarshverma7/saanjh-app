@@ -18,6 +18,7 @@ import '../../router/app_routes.dart';
 import '../../state/diary_store.dart';
 import '../../state/flicker_store.dart';
 import '../../state/send_queue_store.dart';
+import '../../state/story_store.dart';
 import '../../widgets/flicker_received_overlay.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
@@ -124,6 +125,8 @@ class _HomeScreenState extends State<HomeScreen>
           .loadFlickerStatus(DiaryStore.instance.diaries)
           .then((_) { if (mounted) _startFlickerPollTimer(); });
       _startSseStreams();
+      // Stories strip: cached groups render instantly, then server refresh.
+      StoryStore.instance.load();
     });
     OnThisDayService.instance.load();
     _maybeShowOnThisDayOrMorning();
@@ -411,6 +414,8 @@ class _HomeScreenState extends State<HomeScreen>
         // Recover any new_entry (message) events missed during the outage —
         // the flicker reload above only covers presence, not messages.
         _recoverMissedEntries(diaryId);
+        // Also pick up any stories posted while the stream was down.
+        StoryStore.instance.refresh();
       } else if (type == 'new_entry') {
         final entryId  = event['entry_id']  as String?;
         final authorId = event['author_id'] as String?;
@@ -453,6 +458,9 @@ class _HomeScreenState extends State<HomeScreen>
           event['is_recording'] == true,
           (event['entry_type'] as String?) ?? 'voice',
         );
+      } else if (type == 'story_added') {
+        // A partner just published a story — refresh the strip (debounced).
+        StoryStore.instance.refresh();
       } else if (type == 'entry_incoming') {
         // Fast delivery: the partner just STARTED sending — show the memory
         // immediately as an arriving placeholder. The upcoming new_entry event
@@ -1397,6 +1405,49 @@ class _FlickerStrip extends StatelessWidget {
   final String searchQuery;
   const _FlickerStrip({required this.diaries, this.searchQuery = ''});
 
+  static void _openStoryViewer(BuildContext context, StoryGroup group) {
+    HapticFeedback.selectionClick();
+    final idx = StoryStore.instance.groups
+        .indexWhere((g) => g.userId == group.userId);
+    context.push(
+      AppRoutes.storyViewer,
+      extra: {'groupIndex': idx < 0 ? 0 : idx},
+    );
+  }
+
+  /// Partner with an active story → story ring (orange unviewed, green +
+  /// heart once flickered) opening the viewer; otherwise the classic
+  /// flicker chip opening the flicker screen.
+  Widget _buildDiaryChip(
+    BuildContext context,
+    DiaryContact contact,
+    FlickerStore ps,
+    StoryStore storyStore,
+  ) {
+    final group = contact.partnerUserId != null
+        ? storyStore.groupForUser(contact.partnerUserId!)
+        : null;
+    if (group != null && !group.isSelf) {
+      return _FlickerAvatarChip(
+        contact: contact,
+        store: ps,
+        storyGroup: group,
+        onTap: () => _openStoryViewer(context, group),
+      );
+    }
+    return _FlickerAvatarChip(
+      contact: contact,
+      store: ps,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        context.push(
+          AppRoutes.flicker,
+          extra: {'targetDiaryId': contact.id},
+        );
+      },
+    );
+  }
+
   List<DiaryContact> _filtered() {
     if (searchQuery.isEmpty) return diaries;
     final q = searchQuery.toLowerCase();
@@ -1417,7 +1468,8 @@ class _FlickerStrip extends StatelessWidget {
     }
 
     return ListenableBuilder(
-      listenable: FlickerStore.instance,
+      listenable:
+          Listenable.merge([FlickerStore.instance, StoryStore.instance]),
       builder: (_, w) {
         // Sort: received-not-sent first, then streak, then rest
         final ps = FlickerStore.instance;
@@ -1481,23 +1533,50 @@ class _FlickerStrip extends StatelessWidget {
             ),
             SizedBox(
               height: 78,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                physics: const BouncingScrollPhysics(),
-                itemCount: sorted.length,
-                itemBuilder: (_, i) => _FlickerAvatarChip(
-                  contact: sorted[i],
-                  store: ps,
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    context.push(
-                      AppRoutes.flicker,
-                      extra: {'targetDiaryId': sorted[i].id},
-                    );
-                  },
-                ),
-              ),
+              child: Builder(builder: (context) {
+                final storyStore = StoryStore.instance;
+                final selfGroup = storyStore.selfGroup;
+
+                // Stories-first ordering inside the diary chips: partners
+                // with unviewed stories, then viewed, then plain flicker chips.
+                final withStory = <DiaryContact>[];
+                final withViewedStory = <DiaryContact>[];
+                final plain = <DiaryContact>[];
+                for (final c in sorted) {
+                  final g = c.partnerUserId != null
+                      ? storyStore.groupForUser(c.partnerUserId!)
+                      : null;
+                  if (g == null || g.isSelf) {
+                    plain.add(c);
+                  } else if (g.allViewed) {
+                    withViewedStory.add(c);
+                  } else {
+                    withStory.add(c);
+                  }
+                }
+
+                final chips = <Widget>[
+                  if (searchQuery.isEmpty)
+                    _AddStoryChip(onTap: () {
+                      HapticFeedback.selectionClick();
+                      context.push(AppRoutes.addStory);
+                    }),
+                  if (searchQuery.isEmpty && selfGroup != null)
+                    _YourStoryChip(
+                      group: selfGroup,
+                      onTap: () => _openStoryViewer(context, selfGroup),
+                    ),
+                  for (final c in [...withStory, ...withViewedStory, ...plain])
+                    _buildDiaryChip(context, c, ps, storyStore),
+                ];
+
+                return ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  physics: const BouncingScrollPhysics(),
+                  children: chips,
+                );
+              }),
             ),
             const SizedBox(height: 6),
           ],
@@ -1511,11 +1590,13 @@ class _FlickerAvatarChip extends StatelessWidget {
   final DiaryContact contact;
   final FlickerStore store;
   final VoidCallback onTap;
+  final StoryGroup? storyGroup; // active story → ring shows story state
 
   const _FlickerAvatarChip({
     required this.contact,
     required this.store,
     required this.onTap,
+    this.storyGroup,
   });
 
   @override
@@ -1525,10 +1606,15 @@ class _FlickerAvatarChip extends StatelessWidget {
     final mutual = received != null && mePulsed;
     final receivedNotSent = received != null && !mePulsed;
     final streakDays = DiaryStore.instance.streakDays(contact.id);
+    final storyViewed = storyGroup?.allViewed ?? false;
 
     final Color ringColor;
     final double ringAlpha;
-    if (mutual) {
+    if (storyGroup != null) {
+      // Story ring wins: orange until flickered, then green + tiny heart.
+      ringColor = storyViewed ? AppColors.successGreen : AppColors.emberWarm;
+      ringAlpha = 0.95;
+    } else if (mutual) {
       ringColor = AppColors.successGreen;
       ringAlpha = 0.72;
     } else if (receivedNotSent) {
@@ -1567,8 +1653,14 @@ class _FlickerAvatarChip extends StatelessWidget {
                     ),
                     border: Border.all(
                       color: ringColor.withValues(alpha: ringAlpha),
-                      width: 2,
+                      width: storyGroup != null ? 2.4 : 2,
                     ),
+                    image: storyGroup?.avatarUrl != null
+                        ? DecorationImage(
+                            image: NetworkImage(storyGroup!.avatarUrl!),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
                     boxShadow: ringAlpha > 0.3
                         ? [
                             BoxShadow(
@@ -1579,24 +1671,44 @@ class _FlickerAvatarChip extends StatelessWidget {
                           ]
                         : null,
                   ),
-                  child: Center(
-                    child: mePulsed && !mutual
-                        ? Icon(
-                            Icons.favorite_rounded,
-                            size: 18,
-                            color: Colors.white.withValues(alpha: 0.55),
-                          )
-                        : Text(
-                            contact.initial,
-                            style: AppTypography.title(size: 17).copyWith(
-                              color: Colors.white,
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                  ),
+                  child: storyGroup?.avatarUrl != null
+                      ? null
+                      : Center(
+                          child: mePulsed && !mutual && storyGroup == null
+                              ? Icon(
+                                  Icons.favorite_rounded,
+                                  size: 18,
+                                  color: Colors.white.withValues(alpha: 0.55),
+                                )
+                              : Text(
+                                  contact.initial,
+                                  style:
+                                      AppTypography.title(size: 17).copyWith(
+                                    color: Colors.white,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                        ),
                 ),
+                // Viewed story: tiny heart on the bottom-right of the ring
+                if (storyGroup != null && storyViewed)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppColors.successGreen,
+                        border: Border.all(color: AppColors.ink, width: 1.5),
+                      ),
+                      child: const Icon(Icons.favorite_rounded,
+                          size: 9, color: Colors.white),
+                    ),
+                  ),
                 // Incoming pulse dot
-                if (receivedNotSent)
+                if (receivedNotSent && storyGroup == null)
                   Positioned(
                     right: 0,
                     top: 0,
@@ -1613,7 +1725,7 @@ class _FlickerAvatarChip extends StatelessWidget {
                     ),
                   ),
                 // Mutual check
-                if (mutual)
+                if (mutual && storyGroup == null)
                   Positioned(
                     right: 0,
                     top: 0,
@@ -1640,6 +1752,128 @@ class _FlickerAvatarChip extends StatelessWidget {
                     ? AppColors.emberBright
                     : Colors.white.withValues(alpha: 0.35),
               ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Story chips ──────────────────────────────────────────────────────────────
+
+/// Leading "+" circle — opens the live-capture Add Story flow.
+class _AddStoryChip extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AddStoryChip({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 18),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.04),
+                border: Border.all(
+                  color: AppColors.emberWarm.withValues(alpha: 0.55),
+                  width: 1.6,
+                ),
+              ),
+              child: const Icon(Icons.add_rounded,
+                  size: 26, color: AppColors.emberBright),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              'Add story',
+              style: AppTypography.label(
+                  size: 10.5, color: Colors.white.withValues(alpha: 0.35)),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Your Story" circle — latest thumbnail ring; opens own stories in the viewer.
+class _YourStoryChip extends StatelessWidget {
+  final StoryGroup group;
+  final VoidCallback onTap;
+  const _YourStoryChip({required this.group, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 18),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient:
+                        group.avatarUrl == null ? AppColors.emberGradient : null,
+                    image: group.avatarUrl != null
+                        ? DecorationImage(
+                            image: NetworkImage(group.avatarUrl!),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                    border: Border.all(
+                      color: AppColors.emberWarm.withValues(alpha: 0.95),
+                      width: 2.4,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.emberWarm.withValues(alpha: 0.4),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: group.avatarUrl == null
+                      ? const Icon(Icons.person_rounded,
+                          size: 24, color: Colors.white)
+                      : null,
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.emberWarm,
+                      border: Border.all(color: AppColors.ink, width: 1.5),
+                    ),
+                    child: const Icon(Icons.add_rounded,
+                        size: 11, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Text(
+              'Your Story',
+              style: AppTypography.label(
+                  size: 10.5, color: Colors.white.withValues(alpha: 0.35)),
               overflow: TextOverflow.ellipsis,
             ),
           ],

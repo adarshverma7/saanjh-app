@@ -37,4 +37,6 @@ class AppRoutes {
   static const memoryJar = '/memory-jar';
   static const people = '/people';
   static const personalJournal = '/personal-journal';
+  static const addStory = '/story-add';
+  static const storyViewer = '/story-viewer';
 }

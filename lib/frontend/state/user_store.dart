@@ -6,6 +6,7 @@ import '../../backend/auth_api.dart';
 import '../services/media_cache_service.dart';
 import '../theme/app_colors.dart';
 import 'diary_store.dart';
+import 'story_store.dart';
 
 class UserStore extends ChangeNotifier {
   UserStore._();
@@ -119,6 +120,7 @@ class UserStore extends ChangeNotifier {
     // rebuilt by syncing from the backend after the next login.
     await DiaryStore.instance.clearEntryCache();
     await MediaCacheService.instance.clear();
+    await StoryStore.instance.clear();
     DiaryStore.instance.reset();
     notifyListeners();
   }

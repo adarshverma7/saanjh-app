@@ -35,6 +35,8 @@ import '../screens/on_this_day/on_this_day_screen.dart';
 import '../screens/anniversary/anniversary_screen.dart';
 import '../screens/splash/splash_screen.dart';
 import '../screens/record/record_screen.dart';
+import '../screens/stories/add_story_screen.dart';
+import '../screens/stories/story_viewer_screen.dart';
 import '../screens/streak_milestone/streak_milestone_screen.dart';
 import '../screens/welcome_home/welcome_home_screen.dart';
 import '../screens/me/me_screen.dart';
@@ -267,6 +269,23 @@ class AppRouter {
           return SaanjhPage(child: FlickerScreen(
             targetDiaryId: extra['targetDiaryId'] as String?,
           ));
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.addStory,
+        name: 'add-story',
+        pageBuilder: (_, s) => const SaanjhModalPage(child: AddStoryScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.storyViewer,
+        name: 'story-viewer',
+        pageBuilder: (_, s) {
+          final extra = s.extra as Map<String, dynamic>? ?? {};
+          return SaanjhModalPage(
+            child: StoryViewerScreen(
+              initialGroupIndex: extra['groupIndex'] as int? ?? 0,
+            ),
+          );
         },
       ),
       GoRoute(
