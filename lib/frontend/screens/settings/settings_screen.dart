@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../router/app_routes.dart';
+import '../../state/settings_store.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_motion.dart';
@@ -10,6 +11,7 @@ import '../../theme/app_typography.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/media_cache_service.dart';
+import '../../services/on_this_day_service.dart';
 import '../../widgets/cta.dart';
 import '../../widgets/motion/saanjh_reveal.dart';
 import '../../widgets/saanjh_dialog.dart';
@@ -23,7 +25,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _notifVoiceNotes = true;
   bool _autoDownload = true;
   String _mediaCacheSize = 'Calculating…';
 
@@ -38,7 +39,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB used';
     });
   }
-  bool _notifReminders = true;
   bool _notifOnThisDay = true;
   String _language = 'English';
   String _parentLanguage = 'हिंदी';
@@ -48,6 +48,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _refreshCacheSize();
+    // Notification prefs live server-side — pull the latest so the toggles
+    // reflect the real state instead of hardcoded defaults.
+    SettingsStore.instance.load();
+    _notifOnThisDay = OnThisDayService.instance.enabled;
     SharedPreferences.getInstance().then((prefs) {
       if (mounted) {
         setState(() => _pulseTapMode = prefs.getBool('pulse_tap_mode') ?? false);
@@ -77,46 +81,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _showNotifications() {
     HapticFeedback.selectionClick();
+    final store = SettingsStore.instance;
+    // The two backend-backed toggles rebuild from the store; On This Day is a
+    // local scheduled-notification service with no server field.
     _showSheet(
       title: 'Notifications',
-      child: StatefulBuilder(
-        builder: (_, set) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _SheetToggle(
-              label: 'New voice notes',
-              sub: 'When someone sends you a voice note',
-              value: _notifVoiceNotes,
-              onChanged: (v) {
-                set(() => _notifVoiceNotes = v);
-                setState(() => _notifVoiceNotes = v);
-              },
-            ),
-            _SheetDivider(),
-            _SheetToggle(
-              label: 'Occasion reminders',
-              sub: 'Record reminders before birthdays & festivals',
-              value: _notifReminders,
-              onChanged: (v) {
-                set(() => _notifReminders = v);
-                setState(() => _notifReminders = v);
-              },
-            ),
-            _SheetDivider(),
-            _SheetToggle(
-              label: 'On This Day',
-              sub: 'Surface memories from exactly 1 year ago',
-              value: _notifOnThisDay,
-              onChanged: (v) {
-                set(() => _notifOnThisDay = v);
-                setState(() => _notifOnThisDay = v);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+      child: ListenableBuilder(
+        listenable: store,
+        builder: (_, _) => StatefulBuilder(
+          builder: (_, set) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _SheetToggle(
+                label: 'New voice notes',
+                sub: 'When someone sends you a voice note',
+                value: store.newEntry,
+                onChanged: (v) => _syncNotif(store.setNewEntry(v)),
+              ),
+              _SheetDivider(),
+              _SheetToggle(
+                label: 'Occasion reminders',
+                sub: 'Record reminders before birthdays & festivals',
+                value: store.occasionReminders,
+                onChanged: (v) => _syncNotif(store.setOccasionReminders(v)),
+              ),
+              _SheetDivider(),
+              _SheetToggle(
+                label: 'On This Day',
+                sub: 'Surface memories from exactly 1 year ago',
+                value: _notifOnThisDay,
+                onChanged: (v) async {
+                  set(() => _notifOnThisDay = v);
+                  setState(() => _notifOnThisDay = v);
+                  await OnThisDayService.instance.setEnabled(v);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// Awaits a store toggle and, if the PATCH failed (returns false), tells the
+  /// user it didn't save. The store has already reverted its own value.
+  Future<void> _syncNotif(Future<bool> pending) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await pending;
+    if (!ok && mounted) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Couldn't save — check your connection.",
+              style: AppTypography.label(size: 13, color: Colors.white)),
+          backgroundColor: AppColors.modalSurface,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _showLanguage() {
@@ -207,7 +229,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const Icon(Icons.phone_rounded,
                     size: 20, color: AppColors.emberWarm),
                 const SizedBox(width: 12),
-                Text('+91 98765 43210',
+                Text(
+                    UserStore.instance.hasPhone
+                        ? UserStore.instance.displayPhone
+                        : 'Not set',
                     style: AppTypography.body(
                         size: 16, weight: FontWeight.w600)),
               ],
@@ -505,10 +530,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       sub: _mediaCacheSize,
                       onTap: () async {
                         HapticFeedback.selectionClick();
+                        final messenger = ScaffoldMessenger.of(context);
                         await MediaCacheService.instance.clear();
                         await _refreshCacheSize();
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          messenger.showSnackBar(const SnackBar(
                               content: Text('Downloaded media cleared — memories re-download on play.')));
                         }
                       },
@@ -517,28 +543,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 24),
                   _SectionLabel('PREFERENCES'),
                   const SizedBox(height: 10),
-                  _SettingsGroup(items: [
-                    _SettingsTile(
-                      icon: Icons.notifications_outlined,
-                      label: 'Notifications',
-                      sub: _notifVoiceNotes || _notifReminders
-                          ? 'Enabled'
-                          : 'All off',
-                      onTap: _showNotifications,
-                    ),
-                    _SettingsTile(
-                      icon: Icons.language_rounded,
-                      label: 'Language',
-                      sub: '$_language · $_parentLanguage',
-                      onTap: _showLanguage,
-                    ),
-                    _SettingsTile(
-                      icon: Icons.privacy_tip_outlined,
-                      label: 'Privacy',
-                      sub: 'End-to-end encrypted',
-                      onTap: _showPrivacy,
-                    ),
-                  ]),
+                  ListenableBuilder(
+                    listenable: SettingsStore.instance,
+                    builder: (_, _) {
+                      final s = SettingsStore.instance;
+                      return _SettingsGroup(items: [
+                        _SettingsTile(
+                          icon: Icons.notifications_outlined,
+                          label: 'Notifications',
+                          sub: s.newEntry || s.occasionReminders
+                              ? 'Enabled'
+                              : 'All off',
+                          onTap: _showNotifications,
+                        ),
+                        _SettingsTile(
+                          icon: Icons.language_rounded,
+                          label: 'Language',
+                          sub: '$_language · $_parentLanguage',
+                          onTap: _showLanguage,
+                        ),
+                        _SettingsTile(
+                          icon: Icons.privacy_tip_outlined,
+                          label: 'Privacy',
+                          sub: 'End-to-end encrypted',
+                          onTap: _showPrivacy,
+                        ),
+                      ]);
+                    },
+                  ),
                   const SizedBox(height: 20),
                   _SectionLabel('ACCESSIBILITY'),
                   const SizedBox(height: 10),
@@ -564,7 +596,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _SettingsTile(
                       icon: Icons.phone_outlined,
                       label: 'Phone number',
-                      sub: '+91 98765 43210',
+                      sub: UserStore.instance.hasPhone
+                          ? UserStore.instance.displayPhone
+                          : 'Not set',
                       onTap: _showPhoneNumber,
                     ),
                     _SettingsTile(
