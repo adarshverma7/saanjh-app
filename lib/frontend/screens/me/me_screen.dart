@@ -1,9 +1,11 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../backend/auth_api.dart';
 import '../../../backend/notifications_api.dart';
 import '../../../backend/settings_api.dart';
 import '../../router/app_routes.dart';
@@ -337,13 +339,41 @@ class _MeScreenState extends State<MeScreen> {
       context,
       title: 'Delete account?',
       body: 'All your diaries, voice notes and streaks will be permanently '
-          'deleted. This cannot be undone.',
-      confirmLabel: 'Delete',
+          'deleted after a 30-day grace period. We\'ll text you a code to '
+          'confirm it\'s really you.',
+      confirmLabel: 'Continue',
     );
-    if (!confirmed) return;
+    if (!confirmed || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    // Step 1 — ask the backend to send the deletion OTP.
+    try {
+      await AuthApi.instance.requestAccountDeletion();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+          _deleteErrorMessage(e, "Couldn't start deletion. Please try again."),
+          style: AppTypography.label(size: 13, color: Colors.white),
+        ),
+        backgroundColor: AppColors.modalSurface,
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
     if (!mounted) return;
     HapticFeedback.mediumImpact();
-    context.go(AppRoutes.splash);
+
+    // Step 2 — collect the OTP and confirm. The sheet pops `true` on success.
+    final deleted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _DeleteAccountOtpSheet(),
+    );
+    if (deleted == true && mounted) {
+      await UserStore.instance.logout();
+      if (mounted) context.go(AppRoutes.splash);
+    }
   }
 
   void _exportData() {
@@ -1762,6 +1792,162 @@ class _SignOutButtonState extends State<_SignOutButton> {
               size: 14,
               color: AppColors.destructive,
               weight: FontWeight.w500),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pulls the backend's human-readable error message out of a DioException,
+/// falling back to [fallback] for network/unknown errors.
+String _deleteErrorMessage(Object e, String fallback) {
+  if (e is DioException) {
+    final data = e.response?.data;
+    if (data is Map && data['message'] is String) return data['message'] as String;
+  }
+  return fallback;
+}
+
+// ─── Delete-account OTP sheet ─────────────────────────────────────────────────
+
+/// Collects the SMS deletion code and confirms account deletion. Pops `true`
+/// once the backend accepts the OTP; the caller then logs out and leaves.
+class _DeleteAccountOtpSheet extends StatefulWidget {
+  const _DeleteAccountOtpSheet();
+
+  @override
+  State<_DeleteAccountOtpSheet> createState() => _DeleteAccountOtpSheetState();
+}
+
+class _DeleteAccountOtpSheetState extends State<_DeleteAccountOtpSheet> {
+  final _otpCtrl = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _otpCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _complete => _otpCtrl.text.trim().length == 6;
+
+  Future<void> _confirm() async {
+    if (_busy || !_complete) return;
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await AuthApi.instance.confirmAccountDeletion(_otpCtrl.text.trim());
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = _deleteErrorMessage(
+              e, 'That code didn\'t work. Check it and try again.');
+        });
+      }
+    }
+  }
+
+  Future<void> _resend() async {
+    if (_busy) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await AuthApi.instance.requestAccountDeletion();
+      messenger.showSnackBar(SnackBar(
+        content: Text('New code sent',
+            style: AppTypography.label(size: 13, color: Colors.white)),
+        backgroundColor: AppColors.modalSurface,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error =
+            _deleteErrorMessage(e, "Couldn't resend the code. Try again shortly."));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.modalSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          border: Border(top: BorderSide(color: Color(0x1AFFFFFF), width: 1)),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 14, 22, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text('Confirm deletion', style: AppTypography.title(size: 20)),
+                const SizedBox(height: 10),
+                Text(
+                  'Enter the 6-digit code we texted you. Your account is removed '
+                  'after 30 days — sign back in before then to cancel.',
+                  style: AppTypography.body(size: 14, color: AppColors.textMuted),
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  controller: _otpCtrl,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  textAlign: TextAlign.center,
+                  style: AppTypography.title(size: 24)
+                      .copyWith(letterSpacing: 8),
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (_) => setState(() => _error = null),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: '••••••',
+                    hintStyle: AppTypography.title(size: 24).copyWith(
+                        letterSpacing: 8, color: AppColors.textFaint),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.05),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_error!,
+                      style: AppTypography.label(
+                          size: 12.5, color: AppColors.destructive)),
+                ],
+                const SizedBox(height: 16),
+                CtaPrimary(
+                  label: 'Delete my account',
+                  loading: _busy,
+                  onPressed: _complete ? _confirm : null,
+                ),
+                const SizedBox(height: 8),
+                CtaGhost(label: 'Resend code', onPressed: _resend),
+              ],
+            ),
+          ),
         ),
       ),
     );

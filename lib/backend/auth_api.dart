@@ -85,6 +85,19 @@ class AuthApi {
     }
   }
 
+  // ── Account deletion (OTP-confirmed, 30-day grace) ──────────────────────────
+
+  /// Step 1: asks the backend to send a deletion-confirmation OTP (SMS).
+  Future<void> requestAccountDeletion() async {
+    await _dio.post('/auth/account/delete/request');
+  }
+
+  /// Step 2: confirms deletion with the OTP. On success the backend soft-deletes
+  /// the account (purged after 30 days) and deactivates all sessions.
+  Future<void> confirmAccountDeletion(String otp) async {
+    await _dio.post('/auth/account/delete/confirm', data: {'otp': otp});
+  }
+
   Future<void> logout(String deviceId) async {
     try {
       await _dio.post('/auth/logout', data: {'device_id': deviceId});
