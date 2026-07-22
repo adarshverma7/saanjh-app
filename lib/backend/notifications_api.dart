@@ -38,6 +38,24 @@ class NotificationsApi {
     });
   }
 
+  /// Returns the download link from the newest `data_export` notification
+  /// created after [after], or null if none has arrived yet. Used to poll for
+  /// a just-requested data export (notifications come back newest-first).
+  Future<String?> latestDataExportUrl({required DateTime after}) async {
+    final res = await listNotifications(filter: 'all', limit: 10);
+    final items = (res['items'] as List?) ?? const [];
+    for (final it in items) {
+      if (it is! Map) continue;
+      if (it['type'] != 'data_export') continue;
+      final created = DateTime.tryParse(it['created_at']?.toString() ?? '');
+      if (created == null || !created.isAfter(after)) continue;
+      final data = it['data'];
+      final url = data is Map ? data['download_url']?.toString() : null;
+      if (url != null && url.isNotEmpty) return url;
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>> getPreferences() async {
     final res = await _dio.get('/notifications/preferences');
     return res.data as Map<String, dynamic>;

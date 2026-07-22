@@ -20,6 +20,13 @@ class SettingsApi {
     final res = await _dio.patch('/settings', data: patch);
     return AppSettings.fromJson(res.data as Map<String, dynamic>);
   }
+
+  /// GET /settings/data-export — queues a DPDP/GDPR export. The backend builds
+  /// it in the background and delivers a `data_export` notification carrying a
+  /// download link when ready.
+  Future<void> requestDataExport() async {
+    await _dio.get('/settings/data-export');
+  }
 }
 
 class AppSettings {

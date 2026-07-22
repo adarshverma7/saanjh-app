@@ -2,7 +2,10 @@
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../../backend/notifications_api.dart';
+import '../../../backend/settings_api.dart';
 import '../../router/app_routes.dart';
 import '../../services/notification_service.dart';
 import '../../services/on_this_day_service.dart';
@@ -280,6 +283,13 @@ class _MeScreenState extends State<MeScreen> {
                             ),
                             const _RowDivider(),
                             _NavRow(
+                              icon: Icons.download_rounded,
+                              label: 'Export my data',
+                              sub: 'Download a copy of everything you\'ve saved',
+                              onTap: () => _exportData(),
+                            ),
+                            const _RowDivider(),
+                            _NavRow(
                               icon: Icons.delete_forever_rounded,
                               label: 'Delete account',
                               sub: 'Permanently remove all your data',
@@ -334,6 +344,16 @@ class _MeScreenState extends State<MeScreen> {
     if (!mounted) return;
     HapticFeedback.mediumImpact();
     context.go(AppRoutes.splash);
+  }
+
+  void _exportData() {
+    HapticFeedback.selectionClick();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _DataExportSheet(),
+    );
   }
 
   void _confirmSignOut() async {
@@ -1745,6 +1765,208 @@ class _SignOutButtonState extends State<_SignOutButton> {
         ),
       ),
     );
+  }
+}
+
+// ─── Data export sheet ────────────────────────────────────────────────────────
+
+enum _ExportPhase { intro, generating, ready, pending, error }
+
+/// Self-contained data-export flow: explains what happens, triggers the backend
+/// export, polls for the resulting download link, and offers Open / Copy.
+class _DataExportSheet extends StatefulWidget {
+  const _DataExportSheet();
+
+  @override
+  State<_DataExportSheet> createState() => _DataExportSheetState();
+}
+
+class _DataExportSheetState extends State<_DataExportSheet> {
+  _ExportPhase _phase = _ExportPhase.intro;
+  String? _downloadUrl;
+
+  Future<void> _start() async {
+    setState(() => _phase = _ExportPhase.generating);
+    // Tolerate device/server clock skew when matching the fresh notification.
+    final after =
+        DateTime.now().toUtc().subtract(const Duration(seconds: 90));
+    try {
+      await SettingsApi.instance.requestDataExport();
+    } catch (_) {
+      if (mounted) setState(() => _phase = _ExportPhase.error);
+      return;
+    }
+
+    // Poll for the background-generated notification carrying the link.
+    for (var i = 0; i < 12; i++) {
+      await Future.delayed(const Duration(milliseconds: 1200));
+      if (!mounted) return;
+      try {
+        final url = await NotificationsApi.instance
+            .latestDataExportUrl(after: after);
+        if (url != null) {
+          if (!mounted) return;
+          setState(() {
+            _downloadUrl = url;
+            _phase = _ExportPhase.ready;
+          });
+          return;
+        }
+      } catch (_) {
+        // keep polling — transient errors are fine
+      }
+    }
+    // Still building after the poll window — it'll notify when ready.
+    if (mounted) setState(() => _phase = _ExportPhase.pending);
+  }
+
+  Future<void> _open() async {
+    final url = _downloadUrl;
+    if (url == null) return;
+    HapticFeedback.selectionClick();
+    final ok = await launchUrl(Uri.parse(url),
+        mode: LaunchMode.externalApplication);
+    if (!ok && mounted) _copy(); // fall back to copy if no browser handled it
+  }
+
+  void _copy() {
+    final url = _downloadUrl;
+    if (url == null) return;
+    Clipboard.setData(ClipboardData(text: url));
+    HapticFeedback.selectionClick();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Download link copied',
+            style: AppTypography.label(size: 13, color: Colors.white)),
+        backgroundColor: AppColors.modalSurface,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.modalSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Color(0x1AFFFFFF), width: 1)),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 14, 22, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              ..._body(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _body() {
+    switch (_phase) {
+      case _ExportPhase.intro:
+        return [
+          Text('Export my data', style: AppTypography.title(size: 20)),
+          const SizedBox(height: 10),
+          Text(
+            'We\'ll prepare a file with your profile, the memories you\'ve '
+            'recorded and your journal. The download link stays valid for 7 days.',
+            style: AppTypography.body(size: 14, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 20),
+          CtaPrimary(label: 'Prepare my export', onPressed: _start),
+          const SizedBox(height: 8),
+          CtaGhost(
+            label: 'Not now',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ];
+      case _ExportPhase.generating:
+        return [
+          Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.2, color: AppColors.emberWarm),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text('Preparing your export…',
+                    style: AppTypography.body(size: 15)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('This usually takes a few seconds.',
+              style:
+                  AppTypography.label(size: 12.5, color: AppColors.textFaint)),
+          const SizedBox(height: 12),
+        ];
+      case _ExportPhase.ready:
+        return [
+          Row(
+            children: [
+              const Icon(Icons.check_circle_rounded,
+                  color: AppColors.successGreen, size: 22),
+              const SizedBox(width: 10),
+              Text('Your export is ready',
+                  style: AppTypography.title(size: 18)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text('The link is valid for 7 days.',
+              style: AppTypography.body(size: 14, color: AppColors.textMuted)),
+          const SizedBox(height: 20),
+          CtaPrimary(label: 'Open download', onPressed: _open),
+          const SizedBox(height: 8),
+          CtaGhost(label: 'Copy link', onPressed: _copy),
+        ];
+      case _ExportPhase.pending:
+        return [
+          Text('Still preparing…', style: AppTypography.title(size: 18)),
+          const SizedBox(height: 10),
+          Text(
+            'Your export is taking a little longer. We\'ll send you a '
+            'notification with the download link as soon as it\'s ready.',
+            style: AppTypography.body(size: 14, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 20),
+          CtaGhost(
+            label: 'Done',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ];
+      case _ExportPhase.error:
+        return [
+          Text('Couldn\'t start the export',
+              style: AppTypography.title(size: 18)),
+          const SizedBox(height: 10),
+          Text('Please check your connection and try again.',
+              style: AppTypography.body(size: 14, color: AppColors.textMuted)),
+          const SizedBox(height: 20),
+          CtaPrimary(
+              label: 'Try again',
+              onPressed: () => setState(() => _phase = _ExportPhase.intro)),
+        ];
+    }
   }
 }
 
