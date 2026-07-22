@@ -1558,7 +1558,7 @@ class _FlickerStrip extends StatelessWidget {
               ),
             ),
             SizedBox(
-              height: 78,
+              height: 80,
               child: Builder(builder: (context) {
                 final storyStore = StoryStore.instance;
                 final selfGroup = storyStore.selfGroup;
@@ -1599,11 +1599,22 @@ class _FlickerStrip extends StatelessWidget {
                     _buildDiaryChip(context, c, ps, storyStore),
                 ];
 
-                return ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  physics: const BouncingScrollPhysics(),
-                  children: chips,
+                // The strip has a fixed cross-axis height (80). Clamp the label
+                // text scale so large accessibility font sizes can't push a
+                // chip Column past that height and trigger a bottom overflow;
+                // the avatar circles stay fixed regardless.
+                final clamped = MediaQuery.textScalerOf(context)
+                    .scale(1.0)
+                    .clamp(1.0, 1.15);
+                return MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(clamped)),
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    physics: const BouncingScrollPhysics(),
+                    children: chips,
+                  ),
                 );
               }),
             ),
@@ -1648,6 +1659,7 @@ class _AddStoryChip extends StatelessWidget {
             const SizedBox(height: 5),
             Text(
               'Add story',
+              maxLines: 1,
               style: AppTypography.label(
                   size: 10.5, color: Colors.white.withValues(alpha: 0.35)),
               overflow: TextOverflow.ellipsis,
@@ -1726,6 +1738,7 @@ class _YourStoryChip extends StatelessWidget {
             const SizedBox(height: 5),
             Text(
               'Your Story',
+              maxLines: 1,
               style: AppTypography.label(
                   size: 10.5, color: Colors.white.withValues(alpha: 0.35)),
               overflow: TextOverflow.ellipsis,

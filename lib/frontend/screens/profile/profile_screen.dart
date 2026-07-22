@@ -1,11 +1,14 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../../backend/users_api.dart';
 import '../../state/user_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/cta.dart';
+import '../../widgets/profile_avatar.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -17,6 +20,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   late final TextEditingController _nameCtrl;
   bool _saving = false;
+  bool _uploadingAvatar = false;
   // Tracks the typed initial so the avatar updates live.
   String _liveInitial = '?';
 
@@ -30,6 +34,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final i = _computeInitial(_nameCtrl.text);
       if (i != _liveInitial) setState(() => _liveInitial = i);
     });
+    // Pull the latest avatar/name from the backend so the photo shows up.
+    UserStore.instance.refreshProfile();
   }
 
   String _computeInitial(String text) {
@@ -49,12 +55,106 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (name.isEmpty) return; // don't save blank name
     HapticFeedback.lightImpact();
     setState(() => _saving = true);
-    UserStore.instance.setName(name);
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (mounted) {
-      setState(() => _saving = false);
-      context.pop();
+    try {
+      await UsersApi.instance.updateProfile(name: name);
+      await UserStore.instance.setName(name);
+      if (mounted) context.pop();
+    } catch (e) {
+      // Keep the local name so the user doesn't lose their edit, but tell them
+      // it didn't sync.
+      await UserStore.instance.setName(name);
+      if (mounted) {
+        _toast("Saved on this device — couldn't reach the server.");
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _pickAvatar(ImageSource source) async {
+    if (_uploadingAvatar) return;
+    try {
+      final picker = ImagePicker();
+      final XFile? picked = await picker.pickImage(
+        source: source,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return; // user cancelled
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() => _uploadingAvatar = true);
+      final profile = await UsersApi.instance.uploadAvatar(bytes: bytes);
+      UserStore.instance.setAvatarUrl(profile.avatarUrl);
+      HapticFeedback.lightImpact();
+    } catch (e) {
+      if (mounted) _toast("Couldn't update your photo. Please try again.");
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
+  }
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: AppTypography.body(size: 13.5)),
+        backgroundColor: AppColors.inkRaised,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _openAvatarSheet() {
+    HapticFeedback.selectionClick();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.modalSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 14),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded,
+                    color: AppColors.emberWarm),
+                title: Text('Take photo',
+                    style: AppTypography.body(size: 15)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _pickAvatar(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded,
+                    color: AppColors.emberWarm),
+                title: Text('Choose from gallery',
+                    style: AppTypography.body(size: 15)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _pickAvatar(ImageSource.gallery);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -107,80 +207,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 children: [
                   GestureDetector(
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      showModalBottomSheet(
-                        context: context,
-                        backgroundColor: Colors.transparent,
-                        builder: (_) => Container(
-                          decoration: const BoxDecoration(
-                            color: AppColors.modalSurface,
-                            borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(20)),
-                          ),
-                          child: SafeArea(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SizedBox(height: 14),
-                                Container(
-                                  width: 36,
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.18),
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                ListTile(
-                                  leading: const Icon(Icons.camera_alt_rounded,
-                                      color: AppColors.emberWarm),
-                                  title: Text('Take photo',
-                                      style: AppTypography.body(size: 15)),
-                                  onTap: () => Navigator.pop(context),
-                                ),
-                                ListTile(
-                                  leading: const Icon(
-                                      Icons.photo_library_rounded,
-                                      color: AppColors.emberWarm),
-                                  title: Text('Choose from gallery',
-                                      style: AppTypography.body(size: 15)),
-                                  onTap: () => Navigator.pop(context),
-                                ),
-                                ListTile(
-                                  leading: const Icon(Icons.delete_outline_rounded,
-                                      color: AppColors.destructive),
-                                  title: Text('Remove photo',
-                                      style: AppTypography.body(
-                                          size: 15,
-                                          color: AppColors.destructive)),
-                                  onTap: () => Navigator.pop(context),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+                    onTap: _uploadingAvatar ? null : _openAvatarSheet,
                     child: Stack(
                       alignment: Alignment.bottomRight,
                       children: [
-                        Container(
-                          width: 96,
-                          height: 96,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
+                        ListenableBuilder(
+                          listenable: UserStore.instance,
+                          builder: (_, _) => ProfileAvatar(
+                            size: 96,
+                            avatarUrl: UserStore.instance.avatarUrl,
+                            initial: _liveInitial,
+                            initialFontSize: 44,
                             gradient: AppColors.emberGradient,
                           ),
-                          child: Center(
-                            child: Text(_liveInitial,
-                                style: AppTypography.display(size: 44)
-                                    .copyWith(
-                                        color: Colors.white,
-                                        fontStyle: FontStyle.italic)),
-                          ),
                         ),
+                        if (_uploadingAvatar)
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.black.withValues(alpha: 0.45),
+                              ),
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.4,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         Container(
                           width: 28,
                           height: 28,

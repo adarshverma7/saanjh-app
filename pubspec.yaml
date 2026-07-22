@@ -39,6 +39,8 @@ dependencies:
   # Audio recording
   record: ^6.2.1
   smart_auth: ^3.2.0
+  # Profile avatar picking (gallery + camera)
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:

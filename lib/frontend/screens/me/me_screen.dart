@@ -19,6 +19,7 @@ import '../../theme/app_typography.dart';
 import '../../widgets/cta.dart';
 import '../../widgets/milestone_share_card.dart';
 import '../../widgets/motion/saanjh_reveal.dart';
+import '../../widgets/profile_avatar.dart';
 import '../../widgets/saanjh_dialog.dart';
 
 class MeScreen extends StatefulWidget {
@@ -40,6 +41,8 @@ class _MeScreenState extends State<MeScreen> {
   void initState() {
     super.initState();
     _loadPrefs();
+    // Pull latest name + signed avatar URL so the hero shows the real photo.
+    UserStore.instance.refreshProfile();
   }
 
   Future<void> _loadPrefs() async {
@@ -726,40 +729,31 @@ class _ProfileHero extends StatelessWidget {
                 child: Stack(
                   alignment: Alignment.bottomRight,
                   children: [
-                    Container(
-                      width: 92,
-                      height: 92,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: user.hasName
-                            ? LinearGradient(
-                                colors: [
-                                  user.avatarColor,
-                                  user.avatarColor.withValues(alpha: 0.70),
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              )
-                            : AppColors.emberGradient,
-                        boxShadow: [
-                          BoxShadow(
-                            color: (user.hasName
-                                    ? user.avatarColor
-                                    : AppColors.ember)
-                                .withValues(alpha: 0.35),
-                            blurRadius: 22,
-                            offset: const Offset(0, 6),
-                          ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Text(
-                          user.initial,
-                          style: AppTypography.display(size: 44).copyWith(
-                              color: Colors.white,
-                              fontStyle: FontStyle.italic),
+                    ProfileAvatar(
+                      size: 92,
+                      avatarUrl: user.avatarUrl,
+                      initial: user.initial,
+                      initialFontSize: 44,
+                      gradient: user.hasName
+                          ? LinearGradient(
+                              colors: [
+                                user.avatarColor,
+                                user.avatarColor.withValues(alpha: 0.70),
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            )
+                          : AppColors.emberGradient,
+                      shadow: [
+                        BoxShadow(
+                          color: (user.hasName
+                                  ? user.avatarColor
+                                  : AppColors.ember)
+                              .withValues(alpha: 0.35),
+                          blurRadius: 22,
+                          offset: const Offset(0, 6),
                         ),
-                      ),
+                      ],
                     ),
                     Container(
                       width: 28,

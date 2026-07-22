@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backend/api_client.dart';
 import '../../backend/auth_api.dart';
+import '../../backend/users_api.dart';
 import '../services/media_cache_service.dart';
 import '../theme/app_colors.dart';
 import 'diary_store.dart';
@@ -32,17 +33,24 @@ class UserStore extends ChangeNotifier {
   String _phone       = '';
   String _countryCode = '+91';
   String _status      = '';
+  // Signed avatar download URL from the backend. Expires (~1h), so it is kept
+  // in memory only and refreshed via refreshProfile() when a screen opens.
+  String? _avatarUrl;
   bool   _isSimpleMode = false;
 
   static const _kIsLoggedIn  = 'pref_is_logged_in';
   static const _kSimpleMode  = 'pref_simple_mode';
   static const _kIsOnboarded = 'pref_is_onboarded';
   static const _kName        = 'pref_name';
+  static const _kStatus      = 'pref_status';
+  static const _kPhone       = 'pref_phone';
+  static const _kCountryCode = 'pref_country_code';
 
   String get name        => _name;
   String get phone       => _phone;
   String get countryCode => _countryCode;
   String get status      => _status;
+  String? get avatarUrl  => _avatarUrl;
 
   String get displayPhone =>
       _phone.isEmpty ? '' : '$_countryCode $_phone';
@@ -50,8 +58,9 @@ class UserStore extends ChangeNotifier {
   String get initial =>
       _name.isEmpty ? '?' : _name.trim()[0].toUpperCase();
 
-  bool get hasName  => _name.isNotEmpty;
-  bool get hasPhone => _phone.isNotEmpty;
+  bool get hasName   => _name.isNotEmpty;
+  bool get hasPhone  => _phone.isNotEmpty;
+  bool get hasAvatar => (_avatarUrl ?? '').isNotEmpty;
   bool get isSimpleMode => _isSimpleMode;
 
   // ── Initialisation ─────────────────────────────────────────────────────────
@@ -111,10 +120,15 @@ class UserStore extends ChangeNotifier {
     _name        = '';
     _phone       = '';
     _countryCode = '+91';
+    _status      = '';
+    _avatarUrl   = null;
     await _saveLoggedIn(false);
     await _saveOnboarded(false);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kName);
+    await prefs.remove(_kStatus);
+    await prefs.remove(_kPhone);
+    await prefs.remove(_kCountryCode);
     await ApiClient.instance.clearTokens();
     // Sign-out wipes the offline cache: entries + downloaded media. It is
     // rebuilt by syncing from the backend after the next login.
@@ -132,6 +146,31 @@ class UserStore extends ChangeNotifier {
     _isOnboarded  = prefs.getBool(_kIsOnboarded)   ?? false;
     _isSimpleMode = prefs.getBool(_kSimpleMode)     ?? false;
     _name         = prefs.getString(_kName)         ?? '';
+    _status       = prefs.getString(_kStatus)       ?? '';
+    _phone        = prefs.getString(_kPhone)        ?? '';
+    _countryCode  = prefs.getString(_kCountryCode)  ?? '+91';
+    notifyListeners();
+  }
+
+  /// Pulls the latest profile from the backend (name + signed avatar_url) and
+  /// merges it into local state. Best-effort — network/cold-start failures are
+  /// swallowed so the UI keeps its cached values.
+  Future<void> refreshProfile() async {
+    if (!_isLoggedIn) return;
+    try {
+      final p = await UsersApi.instance.getMyProfile();
+      if (p.name != null && p.name!.trim().isNotEmpty) {
+        await setName(p.name!); // persists + notifies
+      }
+      _avatarUrl = p.avatarUrl;
+      notifyListeners();
+    } catch (_) {
+      // Keep cached values on failure.
+    }
+  }
+
+  void setAvatarUrl(String? url) {
+    _avatarUrl = (url ?? '').isEmpty ? null : url;
     notifyListeners();
   }
 
@@ -142,8 +181,10 @@ class UserStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setStatus(String s) {
+  Future<void> setStatus(String s) async {
     _status = s.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kStatus, _status);
     notifyListeners();
   }
 
@@ -154,9 +195,12 @@ class UserStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPhone(String digits, String countryCode) {
+  Future<void> setPhone(String digits, String countryCode) async {
     _phone       = digits.trim();
     _countryCode = countryCode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPhone, _phone);
+    await prefs.setString(_kCountryCode, _countryCode);
     notifyListeners();
   }
 
